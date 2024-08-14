@@ -1,7 +1,6 @@
 {
   "name": "a1",
   "version": "1.0.0",
-  "description": "",
   "main": "translinkparser.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -12,8 +11,10 @@
   "dependencies": {
     "csv-parse": "^5.5.6",
     "csv-parser": "^3.0.0",
-    "node-fetch": "^3.3.2",
+    "node-fetch": "^2.7.0",
     "prompt-sync": "^4.2.0"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {},
+  "description": ""
 }
