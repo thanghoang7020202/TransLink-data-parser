@@ -88,13 +88,35 @@ const alerts = await fetch_data(ALERTS_URL);
  * @returns {Array} list of stops
  */
 function get_stops(route_short_name) {
+    // Find the route_id for the given route_short_name
     let route_id = routes.find(route => route.route_short_name === route_short_name).route_id;
-    let trip_ids = trips.filter(trip => trip.route_id === route_id).map(trip => trip.trip_id);
-    let stop_ids = stop_times.filter(stop_time => trip_ids.includes(stop_time.trip_id)).map(stop_time => stop_time.stop_id);
-    let stops_list = stops.filter(stop => stop_ids.includes(stop.stop_id));
-    // sort the stops by stop_sequence
-    stops_list.sort((a, b) => a.stop_sequence - b.stop_sequence);
-    return stops_list.map(stop => stop.stop_name);
+    
+    // Filter trips by route_id
+    let inbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "0");
+    let outbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "1");
+    //console.info("Inbound Trips:", inbound_trips);
+    //console.info("Outbound Trips:", outbound_trips);
+
+    // Get stop_ids for inbound and outbound trips
+    let inbound_stop_ids = stop_times.filter(stop_time => inbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
+    let outbound_stop_ids = stop_times.filter(stop_time => outbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
+    //console.info("Inbound Stop IDs:", inbound_stop_ids);
+
+    // Sort stops by stop_sequence
+    inbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
+    outbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
+    //console.info("Inbound Stop IDs (Sorted):", inbound_stop_ids);
+
+    // Get the unique stops (assuming stop names might be repeated)
+    let inbound_stops = inbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
+    let outbound_stops = outbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
+    //console.info("Inbound Stops:", inbound_stops);
+
+    // if inbound or outbound stops are empty, return one of them only
+    // Return the combined inbound and outbound stops (Allow duplicates within inbound and outbound)
+    return [...new Set([...inbound_stops]), ...new Set([...outbound_stops])];
+}
+
 
     // Stages testings
     // route_short_name = route_short_name.toString();
@@ -123,7 +145,6 @@ function get_stops(route_short_name) {
 
     // console.log("Stops List:", stopsList);
     // return stopsList;
-}
 
 function print_stops(stopsList) {
     for (let i = 0; i < stopsList.length; i++) {
@@ -141,7 +162,7 @@ async function main() {
     while (true) {
         let bus_route = "";
         try {
-            bus_route = prompt("What Bus Route would you like to take?");
+            bus_route = "40"//prompt("What Bus Route would you like to take?");
             // check if the bus route isvalid and exists in the routes.txt file
             //console.info("Expected type: " + .routetypeof routes_short_name);
             let route_id = routes.filter(route => route.route_short_name === bus_route).map(route => route.route_id);
@@ -162,8 +183,9 @@ async function main() {
             let [start_stop, end_stop] = [];
             try {
                 lstartEnd = prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop"
-                [start_stop, end_stop] = startEnd.split(" - ");
-                
+                [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim());
+                console.info("Start Stop:", start_stop);
+                console.info("End Stop:", end_stop);
                 // check if the start and end stops are valid and exist in the stops.txt file
                 if (!stops.some(stop => stop.stop_name === start_stop) || !stops.some(stop => stop.stop_name === end_stop)) {
                     throw new Error("Invalid Stops");
