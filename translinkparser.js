@@ -1,14 +1,10 @@
 import fetch from 'node-fetch';
-import fs from 'fs';
 // import fs promises from 'fs/promises';
-import { promises as fsPromises } from 'fs';
+import fs, {promises as fsPromises} from 'fs';
 import {parse} from 'csv-parse';
 
 // Read the CSV file and parse it to JSON object
-
-import promptsync from 'prompt-sync' ;  // prompt-sync module
-import { start } from 'repl';
-import { join } from 'path';
+import promptsync from 'prompt-sync'; // prompt-sync module
 const prompt = promptsync({sigint: true} );  
 
 const TRIP_UPDATES_URL = "http://127.0.0.1:5343/gtfs/seq/trip_updates.json";
@@ -84,7 +80,7 @@ async function saveCache(filenameAppend, data) {
 /**
  * This function will read a JSON cache file with the specified filename.
  * @param {string} filenameAppend - The string to append to the JSON filename.
- * @returns {string} the JSON data from the cache file.
+ * @returns {string} The string containing JSON data from the cache file.
  */
 async function readCache(filenameAppend) {
     // YOUR CODE HERE
@@ -94,8 +90,9 @@ async function readCache(filenameAppend) {
         console.log(messageReadCache(filenameAppend));
         return data;
     } catch(error) {
-        console.log("The error is: ${error}");
+        console.log("The error is: ", error);
     }
+    return null;
 }
 
 /**
@@ -152,13 +149,23 @@ if (allData) {
 
 }
 
-function join_static_data(trips, stops, stop_times, route_id, calendar, calendar_dates){
+function join_static_data(trips, stops, stop_times, route_id, calendar, calendar_dates, start_stop, end_stop, stopsList) {
     // join all the given tables and filtering out rows that not related to given route_id
-    const filteredTrips = trips.filter(trip => trip.route_id === route_id);
+    let filteredTrips = trips.filter(trip => trip.route_id === route_id);
     const filteredStopTimes = stop_times.filter(stop_time => filteredTrips.map(trip => trip.trip_id).includes(stop_time.trip_id));
     const filteredStops = stops.filter(stop => filteredStopTimes.map(stop_time => stop_time.stop_id).includes(stop.stop_id));
     const filteredCalendar = calendar.filter(cal => filteredTrips.map(trip => trip.service_id).includes(cal.service_id));
     const filteredCalendarDates = calendar_dates.filter(cal_date => filteredTrips.map(trip => trip.service_id).includes(cal_date.service_id));
+    // handle the case where the route is a loop route or inbound-outbound route
+    // get the inbound and outbound trips
+    const inboundTrips = filteredTrips.filter(trip => trip.direction_id === "0");
+    const outboundTrips = filteredTrips.filter(trip => trip.direction_id === "1");
+    console.info("Inbound Trips length:", inboundTrips.length);
+    console.info("Outbound Trips length:", outboundTrips.length);
+    const boundLength = Math.floor(stopsList.length / 2);
+    // if outboundTrips exists and value of start_stop is greater than length of inboundTrips, return outboundTrips, else return inboundTrips
+    filteredTrips = outboundTrips.length !== 0 && Number(start_stop) > boundLength ? outboundTrips : inboundTrips;
+    
     return {
         trips: filteredTrips,
         stops: filteredStops,
@@ -174,7 +181,7 @@ function join_static_data(trips, stops, stop_times, route_id, calendar, calendar
  * Get all stops of a route
  * Method: route_short_name -> route_id -> trip_id -> (list of) stop_id -> (list of) stop_name
  * Handle loop routes or inbound-outbound routes
- * @param {number} route_short_name 
+ * @param {string} route_short_name
  * @returns {Array} all_stops list of stops
  */
 function get_stops(route_short_name) {
@@ -203,10 +210,10 @@ function get_stops(route_short_name) {
     //console.info("Inbound Stops:", inbound_stops);
 
     // Combine inbound and outbound stops, solving route loops/inbound-outbound routes
-    let all_stops = [];
+    let all_stops;
 
     // If it's a loop route (outbound_trips is []), the last stop should be the same as the first stop, but add it explicitly
-    if (outbound_trips.length != 0) {
+    if (outbound_trips.length !== 0) {
         // Return the combined inbound and outbound stops (Allow duplicates within inbound and outbound)
         all_stops = [...new Set([...inbound_stops]), ...new Set([...outbound_stops])];
     } else {
@@ -227,14 +234,13 @@ function print_stops(stopsList) {
 /**
  * Convert time string to Date object
  * @param {string} time
- * @returns {Date} Date object
+ * @returns {number} time in milliseconds
  */
 function toTime(time) {
     let [hour, minute, second] = time.split(":").map(Number);
     let date = new Date();
     date.setHours(hour, minute, second, 0);
-    let t = date.getTime();
-    return t;
+    return date.getTime();
 }
 
 /**
@@ -248,8 +254,7 @@ function toDate(stringDate) {
     let month = stringDate.substring(4, 6);
     let day = stringDate.substring(6, 8);
     //console.log(year, month, day);
-    let date = new Date(year+"-"+month+"-"+day);
-    return date;
+    return new Date(year + "-" + month + "-" + day);
 }
 
 // @ts-check
@@ -268,7 +273,7 @@ async function main() {
         let hour = "", minute = "";
 
         try {
-            routeShortName = await prompt("What Bus Route would you like to take?"); // "40"// 
+            routeShortName = "66"// await prompt("What Bus Route would you like to take?"); //
             // check if the bus route isvalid and exists in the routes.txt file
             //console.info("Expected type: " + .routetypeof routes_short_name);
             route_id = routes.find(route => route.route_short_name === routeShortName).route_id;
@@ -290,7 +295,7 @@ async function main() {
         while (true) {
             let [start_stop, end_stop] = [];
             try {
-                let startEnd = await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "2 - 7"; //
+                let startEnd = "14 - 20"; //await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" 
                 [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim()).map(Number);
                 //console.info("Start Stop:", start_stop);
                 //console.info("End Stop:", end_stop);
@@ -307,7 +312,7 @@ async function main() {
             
             while (true) {
                 try {
-                    dateStr = await prompt("What date will you take the route?"); // "2024-08-19"//
+                    dateStr = "2024-08-19"//await prompt("What date will you take the route?"); // 
                     // check if the time is valid: Year, month & day in https://tc39.es/ecma262/#sec-date-time-string-format (YYYY-MM-DD)
                     if (!dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
                         throw new Error("Invalid Time");
@@ -327,7 +332,7 @@ async function main() {
                 
                 while (true) {
                     try {
-                        time = await prompt("What time will you leave?"); // "06:57"//
+                        time = "06:57"//await prompt("What time will you leave?"); // 
                         // check if the time is valid: Hour & minutes in 24 hour time in https://tc39.es/ecma262/#sec-date-time-stringformat (HH:mm)
                         if (!time.match(/^\d{2}:\d{2}$/)) {
                             throw new Error("Invalid Time");
@@ -343,7 +348,7 @@ async function main() {
                         continue;
                     }
 
-                    // getspecifc date and time that the user wants to take the bus
+                    // get specific date and time that the user wants to take the bus
                     const approximate_time = new Date(date);
                     approximate_time.setHours(hour + BRISBANE_TIMEZONE, minute, 0, 0);
                     console.info("Approximate Time:", approximate_time);
@@ -356,7 +361,7 @@ async function main() {
                     console.info("route_id:", route_id, "date:", date, "time:", time, "start_stop:", start_stop, "end_stop:", end_stop, "hour:", hour, "minute:", minute);
 
                     // join the static data to get the data for the selected route
-                    let joinedData = join_static_data(trips,stops,stop_times, route_id, calendar, calendar_dates);
+                    let joinedData = join_static_data(trips, stops, stop_times, route_id, calendar, calendar_dates, start_stop, end_stop, stopsList);
                     
                     // print the length of each table to verify the data is correct and not null
                     console.info("length of each table: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
@@ -384,9 +389,15 @@ async function main() {
                     console.info("length of each table after filtering: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
 
                     // start_stop arrival time
-                    let StartstopTime = joinedData.stop_times.find(stop_time => stop_time.stop_id === joinedData.stops.find(stop => stop.stop_name === stopsList[start_stop - 1]).stop_id);
+                    let StartstopTime = joinedData.stop_times.find(stop_time => () => {
+                        let timediff = toTime(stop_time.arrival_time) - approximate_time.getTime();
+                        return stop_time.stop_id === joinedData.stops.find(stop => stop.stop_name === stopsList[start_stop - 1]).stop_id 
+                        && timediff >= 0 && timediff <= TEN_MINUTES;
+                    });
+
                     joinedData.trips = joinedData.trips.filter(trip => trip.trip_id === StartstopTime.trip_id);
-                    console.info("Start Stop Time:", StartstopTime, "Trip ID:", StartstopTime.trip_id, "trips length:", joinedData.trips.length);
+                    joinedData.stop_times = joinedData.stop_times.filter(stop_time => stop_time.trip_id === StartstopTime.trip_id);
+                    console.info("length of each table after filtering start_stop: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
 
                     let service_id = joinedData.service_id[0];
                     let routeLongName = routes.find(route => route.route_id === route_id).route_long_name;
@@ -399,7 +410,8 @@ async function main() {
                     //let liveArrivalTime = new Date(toTime(arrivalTime) + BRISBANE_TIMEZONE * 3600000);
                     //let liveGeoPosition = vehicle_positions.find(vehicle_position => vehicle_position.trip.trip_id === trips.find(trip => trip.route_id === route_id).trip_id).position;
                     let estimatedTime = new Date(toTime(endStopArrivalTime) - toTime(arrivalTime));
-                    let displayer = {
+                    console.info("Estimated Travel Time:", estimatedTime);
+                    let displayed = {
                         "Route Short Name": routeShortName,
                         "Route Long Name": routeLongName,
                         "Service ID": service_id,
@@ -410,11 +422,11 @@ async function main() {
                         "Estimated Travel Time": estimatedTime.toISOString().substr(11, 8)
                     };
 
-                    console.table(displayer);
+                    console.table(displayed);
                 
                     while (true) {
                         try {
-                            let restart = await prompt("Would you like to search again?");
+                            let restart = prompt("Would you like to search again?");
                             // case insensitive
                             if (restart.toLowerCase() === "yes" || restart.toLowerCase() === "y") {
                                 break;
@@ -425,7 +437,6 @@ async function main() {
                             }
                         } catch (error) {
                             console.error("Please enter a valid option.");
-                            continue;
                         }
                     }
                     break;
