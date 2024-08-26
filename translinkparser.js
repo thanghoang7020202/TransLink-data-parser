@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 // import fs promises from 'fs/promises';
 import fs, {promises as fsPromises} from 'fs';
 import {parse} from 'csv-parse';
+import { csvDF } from './dataframe.js';
 
 // Read the CSV file and parse it to JSON object
 import promptsync from 'prompt-sync'; // prompt-sync module
@@ -16,50 +17,37 @@ const messageReadCache = (filenameAppend) => `Read a JSON cache file called "${f
 const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const BRISBANE_TIMEZONE = 10; // Brisbane timezone is UTC+10
 const TEN_MINUTES = 600000; // 10 minutes in milliseconds
-/**
- * Read the file from the path and parse it to JSON object
- * the encoding type for the file is utf8
- * @param {string} path Path to the file 
- * @returns {Object} JSON object
- */
-async function readFile(path) {
-    try{
-        const processFile = async (path) => {
-            const records = [];
-            const parser = fs
-            .createReadStream(path)
-            .pipe(parse({
-                columns: true,
-                skip_empty_lines: true
-            }));
-            for await (const record of parser) {
-                // Work with each record
-                records.push(record);
-            }
-            return records;
-        };
-
-        const records = await processFile(path);
-        console.info("Got records from file:", path);
-        return records;
-    } catch (error) {
-        console.error("Error reading file:", path, "with message:", error.message);
-        return [];
-    }
-}
 
 // get the data from the static-data folder
-const agency = await readFile('./static-data/agency.txt');
-const calendar_dates = await readFile('./static-data/calendar_dates.txt');
-const calendar = await readFile('./static-data/calendar.txt');
-const feed_info = await readFile('./static-data/feed_info.txt');
-const temp = await readFile('./static-data/routes.txt');
-const routes = temp.filter(route => route.route_type === "3"); // get only bus routes
-//console.info("Bus Routes:", routes);
-const shapes = readFile('./static-data/shapes.txt');
-const stop_times = await readFile('./static-data/stop_times.txt');
-const stops = await readFile('./static-data/stops.txt');
-const trips = await readFile('./static-data/trips.txt');
+// const agency = await readFile('./static-data/agency.txt');
+// const calendar_dates = await readFile('./static-data/calendar_dates.txt');
+// const calendar = await readFile('./static-data/calendar.txt');
+// const feed_info = await readFile('./static-data/feed_info.txt');
+// const temp = await readFile('./static-data/routes.txt');
+// const routes = temp.filter(route => route.route_type === "3"); // get only bus routes
+// //console.info("Bus Routes:", routes);
+// const shapes = readFile('./static-data/shapes.txt');
+// const stop_times = await readFile('./static-data/stop_times.txt');
+// const stops = await readFile('./static-data/stops.txt');
+// const trips = await readFile('./static-data/trips.txt');
+
+
+
+const joinedDf = await csvDF().loadCSV('./static-data/routes.txt');
+const tripsDF = await csvDF().loadCSV('./static-data/trips.txt');
+joinedDf.filter('route_type', '3');
+
+const stopTimesDF = await csvDF().loadCSV('./static-data/stop_times.txt');
+
+const stopsDF = await csvDF().loadCSV('./static-data/stops.txt');
+
+const calendarDF = await csvDF().loadCSV('./static-data/calendar.txt');
+console.info("First Calendar DF length:", calendarDF.getData().length);
+
+const calendarDatesDF = await csvDF().loadCSV('./static-data/calendar_dates.txt');
+//joinedDf.join(calendarDatesDF, 'service_id');
+ 
+
 
 /**
  * This function will save a JSON cache file with the specified filename & data.
@@ -67,7 +55,6 @@ const trips = await readFile('./static-data/trips.txt');
  * @param {string} data - The string containing JSON data to save.
  */
 async function saveCache(filenameAppend, data) {
-    // YOUR CODE HERE
     try {
         filenameAppend = CACHE_FOLDER + filenameAppend + ".json";
         await fsPromises.writeFile(filenameAppend, JSON.stringify(data));
@@ -83,7 +70,6 @@ async function saveCache(filenameAppend, data) {
  * @returns {string} The string containing JSON data from the cache file.
  */
 async function readCache(filenameAppend) {
-    // YOUR CODE HERE
     try {
         filenameAppend = CACHE_FOLDER + filenameAppend + ".json";
         const data = await fsPromises.readFile(filenameAppend, 'utf8');
@@ -149,34 +135,6 @@ if (allData) {
 
 }
 
-function join_static_data(trips, stops, stop_times, route_id, calendar, calendar_dates, start_stop, end_stop, stopsList) {
-    // join all the given tables and filtering out rows that not related to given route_id
-    let filteredTrips = trips.filter(trip => trip.route_id === route_id);
-    const filteredStopTimes = stop_times.filter(stop_time => filteredTrips.map(trip => trip.trip_id).includes(stop_time.trip_id));
-    const filteredStops = stops.filter(stop => filteredStopTimes.map(stop_time => stop_time.stop_id).includes(stop.stop_id));
-    const filteredCalendar = calendar.filter(cal => filteredTrips.map(trip => trip.service_id).includes(cal.service_id));
-    const filteredCalendarDates = calendar_dates.filter(cal_date => filteredTrips.map(trip => trip.service_id).includes(cal_date.service_id));
-    // handle the case where the route is a loop route or inbound-outbound route
-    // get the inbound and outbound trips
-    const inboundTrips = filteredTrips.filter(trip => trip.direction_id === "0");
-    const outboundTrips = filteredTrips.filter(trip => trip.direction_id === "1");
-    console.info("Inbound Trips length:", inboundTrips.length);
-    console.info("Outbound Trips length:", outboundTrips.length);
-    const boundLength = Math.floor(stopsList.length / 2);
-    // if outboundTrips exists and value of start_stop is greater than length of inboundTrips, return outboundTrips, else return inboundTrips
-    filteredTrips = outboundTrips.length !== 0 && Number(start_stop) > boundLength ? outboundTrips : inboundTrips;
-    
-    return {
-        trips: filteredTrips,
-        stops: filteredStops,
-        stop_times: filteredStopTimes,
-        calendar: filteredCalendar,
-        calendar_dates: filteredCalendarDates,
-        service_id: [...new Set(filteredTrips.map(trip => trip.service_id))]
-    };
-}
-
-
 /**
  * Get all stops of a route
  * Method: route_short_name -> route_id -> trip_id -> (list of) stop_id -> (list of) stop_name
@@ -184,43 +142,35 @@ function join_static_data(trips, stops, stop_times, route_id, calendar, calendar
  * @param {string} route_short_name
  * @returns {Array} all_stops list of stops
  */
-function get_stops(route_short_name) {
-    // Find the route_id for the given route_short_name
-    let route_id = routes.find(route => route.route_short_name === route_short_name).route_id;
+function get_stops(route_id) {
+    let stopsList = []; // list of stop_name strings
     
-    // Filter trips by route_id
-    let inbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "0");
-    let outbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "1");
-    //console.info("Inbound Trips:", inbound_trips);
-    //console.info("Outbound Trips:", outbound_trips);
+    let inboundTrip = tripsDF.extract('route_id', route_id).filter(trip => trip.direction_id === "0");
+    let outboundTrip = tripsDF.extract('route_id', route_id).filter(trip => trip.direction_id === "1");
+    console.info("Inbound Trip length:", inboundTrip.length);
+    console.info("Outbound Trip length:", outboundTrip.length);
 
-    // Get stop_ids for inbound and outbound trips
-    let inbound_stop_ids = stop_times.filter(stop_time => inbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
-    let outbound_stop_ids = stop_times.filter(stop_time => outbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
-    //console.info("Inbound Stop IDs:", inbound_stop_ids);
+    const inboundTripIds = inboundTrip.map(trip => trip.trip_id);
 
-    // Sort stops by stop_sequence
-    inbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
-    outbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
-    //console.info("Inbound Stop IDs (Sorted):", inbound_stop_ids);
+    // get all stop_ids for inbound trips
+    let inboundStopIds = stopTimesDF.getData().filter(stop => inboundTripIds.includes(stop.trip_id)).map(stop => stop.stop_id);
+    let outboundStopIds = outboundTrip.length !== 0 ? stopTimesDF.getData().filter(stop => outboundTrip.map(trip => trip.trip_id).includes(stop.trip_id)).map(stop => stop.stop_id) : [];
+    console.info("Inbound Stop IDs length:", inboundStopIds.length);
+    console.info("Outbound Stop IDs length:", outboundStopIds.length);
 
-    // Get the unique stops (assuming stop names might be repeated)
-    let inbound_stops = inbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
-    let outbound_stops = outbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
-    //console.info("Inbound Stops:", inbound_stops);
+    // Sort the stop_ids by stop_sequence and get the stop_names
+    let inboundStopNames = stopsDF.getData().filter(stop => inboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => stop.stop_name);
+    let outboundStopNames = outboundTrip.length !== 0 ? stopsDF.getData().filter(stop => outboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => stop.stop_name) : [];
 
-    // Combine inbound and outbound stops, solving route loops/inbound-outbound routes
     let all_stops;
-
     // If it's a loop route (outbound_trips is []), the last stop should be the same as the first stop, but add it explicitly
-    if (outbound_trips.length !== 0) {
-        // Return the combined inbound and outbound stops (Allow duplicates within inbound and outbound)
-        all_stops = [...new Set([...inbound_stops]), ...new Set([...outbound_stops])];
+    if (outboundStopNames.length !== 0) {
+        all_stops = [...new Set([...inboundStopNames]), ...new Set([...outboundStopNames])];
     } else {
-        all_stops = [...new Set([...inbound_stops])];
+        all_stops = [...new Set([...inboundStopNames])];
         all_stops.push(all_stops[0]); // Add the starting stop at the end to complete the loop
     }
-
+    //console.info("All Stops:", all_stops);
     return all_stops;
 }
 
@@ -271,31 +221,36 @@ async function main() {
         let date = "";
         let time = "";
         let hour = "", minute = "";
+        let stopsList = [];
 
         try {
-            routeShortName = "66"// await prompt("What Bus Route would you like to take?"); //
+            routeShortName = "66" // await prompt("What Bus Route would you like to take?"); // 
             // check if the bus route isvalid and exists in the routes.txt file
             //console.info("Expected type: " + .routetypeof routes_short_name);
-            route_id = routes.find(route => route.route_short_name === routeShortName).route_id;
-            if (route_id.length === 0) {
+            //console.log(joinedDf.getData().length);
+            route_id = joinedDf.find('route_short_name', routeShortName).route_id;
+        
+            if (!route_id) {
                 throw new Error("Invalid Bus Route");
             }
             console.info("Bus Route: " + routeShortName + " of type " + typeof routeShortName + " with route_id: " + route_id);
             
         } catch (error) {
+            console.error(error.message);
             console.error("Please enter a valid bus route.");
             continue;
         }
         // print all stops for the bus route from route_url
-        let stopsList = get_stops(routeShortName);
+        joinedDf.filter('route_id', route_id);
+        console.info("Joined DF length:", joinedDf.getData().length);
+        stopsList = get_stops(route_id);
         print_stops(stopsList);
         // make stopsList as tuple with index and stop name
         stopsTuple = stopsList.map((stop, index) => [index + 1, stop]);
-        
         while (true) {
             let [start_stop, end_stop] = [];
             try {
-                let startEnd = "14 - 20"; //await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" 
+                let startEnd = "1 - 2"; // await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // 
                 [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim()).map(Number);
                 //console.info("Start Stop:", start_stop);
                 //console.info("End Stop:", end_stop);
@@ -358,72 +313,47 @@ async function main() {
                     console.info("Day of the week:", dayOfWeek);
 
                     // print to verify the user input is correct
-                    console.info("route_id:", route_id, "date:", date, "time:", time, "start_stop:", start_stop, "end_stop:", end_stop, "hour:", hour, "minute:", minute);
-
-                    // join the static data to get the data for the selected route
-                    let joinedData = join_static_data(trips, stops, stop_times, route_id, calendar, calendar_dates, start_stop, end_stop, stopsList);
+                    console.info("route_id:", route_id, "date:", date, "start_stop:", start_stop, "end_stop:", end_stop, "time:", time);
                     
-                    // print the length of each table to verify the data is correct and not null
-                    console.info("length of each table: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
-                    
-                    // filltering the calendar table to get the service_id that is available on the day of the week
-                    //console.info("Calendar:", joinedData.calendar);
-                    for (let i = 0; i < joinedData.calendar.length; i++) {
-                        console.info(joinedData.calendar[i][dayOfWeek], toDate(joinedData.calendar[i].start_date), toDate(joinedData.calendar[i].end_date), date);
+                    if (Number(start_stop) - Math.floor(stopsList.length / 2) > 0) {  
+                        tripsDF.filter('direction_id', '1');
+                    } else {
+                        tripsDF.filter('direction_id', '0');
                     }
+                    // joinedDf.join(tripsDF, 'route_id');
+                    // console.info("Joined DF length:", joinedDf.getData().length);
 
-                    joinedData.calendar = joinedData.calendar.filter(cal => {
+                    // let service_ids = joinedDf.getData().map(route => route.service_id);
+                    // service_ids = [...new Set(service_ids)];
+                    // console.info("Service IDs length:", service_ids.length);
+                    // let trip_ids = tripsDF.getData().map(trip => trip.trip_id);
+
+                    // let filteredStopTimes = stopTimesDF.getData().filter(stop => {
+                    //     return stop.trip_id === trip_ids[0] && stop.stop_id === stopsList[start_stop - 1];
+                    // });
+                    
+
+                    stopTimesDF.join(stopsDF, 'stop_id');
+                    console.info("Stop Times DF length:", stopTimesDF.getData().length);
+                    
+                    console.info("Calendar DF length:", calendarDF.getData().length);
+                    console.info("Calendar Dates DF length:", calendarDatesDF.getData().length);
+                    calendarDF.join(calendarDatesDF, 'service_id'); 
+                    console.info("after, Calendar DF length:", calendarDF.getData().length);
+
+                    calendarDF.filterBy(cal => {
                         let startDate = toDate(cal.start_date);
                         let endDate = toDate(cal.end_date);
-                        return joinedData.service_id.includes(cal.service_id)
-                            && cal[dayOfWeek] === "1"
+                        return cal[dayOfWeek] === "1"
                             && date >= startDate
                             && date <= endDate;
-                    });
+                    }); 
+                    console.info("Filtered Calendar DF length:", calendarDF.getData().length);                   
 
-                    joinedData.service_id = joinedData.calendar.map(cal => cal.service_id);
-                    joinedData.calendar_dates = joinedData.calendar_dates.filter(cal_date => joinedData.service_id.includes(cal_date.service_id));
-                    joinedData.trips = joinedData.trips.filter(trip => joinedData.service_id.includes(trip.service_id));
-                    joinedData.stop_times = joinedData.stop_times.filter(stop_time => joinedData.trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
-                    joinedData.stops = joinedData.stops.filter(stop => joinedData.stop_times.map(stop_time => stop_time.stop_id).includes(stop.stop_id));
-                    console.info("length of each table after filtering: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
-
-                    // start_stop arrival time
-                    let StartstopTime = joinedData.stop_times.find(stop_time => () => {
-                        let timediff = toTime(stop_time.arrival_time) - approximate_time.getTime();
-                        return stop_time.stop_id === joinedData.stops.find(stop => stop.stop_name === stopsList[start_stop - 1]).stop_id 
-                        && timediff >= 0 && timediff <= TEN_MINUTES;
-                    });
-
-                    joinedData.trips = joinedData.trips.filter(trip => trip.trip_id === StartstopTime.trip_id);
-                    joinedData.stop_times = joinedData.stop_times.filter(stop_time => stop_time.trip_id === StartstopTime.trip_id);
-                    console.info("length of each table after filtering start_stop: ", joinedData.trips.length, joinedData.stops.length, joinedData.stop_times.length, joinedData.calendar.length, joinedData.calendar_dates.length, joinedData.service_id.length);
-
-                    let service_id = joinedData.service_id[0];
-                    let routeLongName = routes.find(route => route.route_id === route_id).route_long_name;
-                    let headSign = trips.find(trip => trip.route_id === route_id).trip_headsign;
-                    let arrivalTime = StartstopTime.arrival_time;
-                    // end_stop arrival time
-                    let endStopArrivalTime = joinedData.stop_times.find(stop_time => stop_time.stop_id === joinedData.stops.find(stop => stop.stop_name === stopsList[end_stop - 1]).stop_id).arrival_time;
-
-                    console.info("End Stop Arrival Time:", endStopArrivalTime);
-                    //let liveArrivalTime = new Date(toTime(arrivalTime) + BRISBANE_TIMEZONE * 3600000);
-                    //let liveGeoPosition = vehicle_positions.find(vehicle_position => vehicle_position.trip.trip_id === trips.find(trip => trip.route_id === route_id).trip_id).position;
-                    let estimatedTime = new Date(toTime(endStopArrivalTime) - toTime(arrivalTime));
-                    console.info("Estimated Travel Time:", estimatedTime);
-                    let displayed = {
-                        "Route Short Name": routeShortName,
-                        "Route Long Name": routeLongName,
-                        "Service ID": service_id,
-                        "Heading Sign": headSign,
-                        "Scheduled Arrival Time": arrivalTime,
-                        //"Live Arrival Time": liveArrivalTime,
-                        //"Live Position": liveGeoPosition,
-                        "Estimated Travel Time": estimatedTime.toISOString().substr(11, 8)
-                    };
-
-                    console.table(displayed);
-                
+                    joinedDf.join(stopTimesDF, 'trip_id');
+                    joinedDf.join(calendarDF, 'service_id');
+                    console.info("Joined DF:", joinedDf.getData());
+                    
                     while (true) {
                         try {
                             let restart = prompt("Would you like to search again?");
