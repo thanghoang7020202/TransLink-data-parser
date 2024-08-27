@@ -17,6 +17,7 @@ const messageReadCache = (filenameAppend) => `Read a JSON cache file called "${f
 const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const BRISBANE_TIMEZONE = 10; // Brisbane timezone is UTC+10
 const TEN_MINUTES = 600000; // 10 minutes in milliseconds
+let isLoopRoute = false;
 
 // get the data from the static-data folder
 // const agency = await readFile('./static-data/agency.txt');
@@ -33,18 +34,17 @@ const TEN_MINUTES = 600000; // 10 minutes in milliseconds
 
 
 
-const joinedDf = await csvDF().loadCSV('./static-data/routes.txt');
-const tripsDF = await csvDF().loadCSV('./static-data/trips.txt');
+let joinedDf = await csvDF().loadCSV('./static-data/routes.txt');
+let tripsDF = await csvDF().loadCSV('./static-data/trips.txt');
 joinedDf.filter('route_type', '3');
 
-const stopTimesDF = await csvDF().loadCSV('./static-data/stop_times.txt');
+let stopTimesDF = await csvDF().loadCSV('./static-data/stop_times.txt');
 
-const stopsDF = await csvDF().loadCSV('./static-data/stops.txt');
+let stopsDF = await csvDF().loadCSV('./static-data/stops.txt');
 
-const calendarDF = await csvDF().loadCSV('./static-data/calendar.txt');
-console.info("First Calendar DF length:", calendarDF.getData().length);
+let calendarDF = await csvDF().loadCSV('./static-data/calendar.txt');
 
-const calendarDatesDF = await csvDF().loadCSV('./static-data/calendar_dates.txt');
+let calendarDatesDF = await csvDF().loadCSV('./static-data/calendar_dates.txt');
 //joinedDf.join(calendarDatesDF, 'service_id');
  
 
@@ -153,20 +153,21 @@ function get_stops(route_id) {
     const inboundTripIds = inboundTrip.map(trip => trip.trip_id);
 
     // get all stop_ids for inbound trips
-    let inboundStopIds = stopTimesDF.getData().filter(stop => inboundTripIds.includes(stop.trip_id)).map(stop => stop.stop_id);
-    let outboundStopIds = outboundTrip.length !== 0 ? stopTimesDF.getData().filter(stop => outboundTrip.map(trip => trip.trip_id).includes(stop.trip_id)).map(stop => stop.stop_id) : [];
+    let inboundStopIds = stopTimesDF.extractBy(stop => inboundTripIds.includes(stop.trip_id)).map(stop => stop.stop_id);
+    let outboundStopIds = outboundTrip.length !== 0 ? stopTimesDF.extractBy(stop => outboundTrip.map(trip => trip.trip_id).includes(stop.trip_id)).map(stop => stop.stop_id) : [];
     console.info("Inbound Stop IDs length:", inboundStopIds.length);
     console.info("Outbound Stop IDs length:", outboundStopIds.length);
 
     // Sort the stop_ids by stop_sequence and get the stop_names
-    let inboundStopNames = stopsDF.getData().filter(stop => inboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => stop.stop_name);
-    let outboundStopNames = outboundTrip.length !== 0 ? stopsDF.getData().filter(stop => outboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => stop.stop_name) : [];
+    let inboundStopNames = stopsDF.extractBy(stop => inboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => [stop.stop_id, stop.stop_name]);
+    let outboundStopNames = outboundTrip.length !== 0 ? stopsDF.extractBy(stop => outboundStopIds.includes(stop.stop_id)).sort((a, b) => a.stop_sequence - b.stop_sequence).map(stop => [stop.stop_id, stop.stop_name]) : [];
 
     let all_stops;
     // If it's a loop route (outbound_trips is []), the last stop should be the same as the first stop, but add it explicitly
     if (outboundStopNames.length !== 0) {
         all_stops = [...new Set([...inboundStopNames]), ...new Set([...outboundStopNames])];
     } else {
+        isLoopRoute = true;
         all_stops = [...new Set([...inboundStopNames])];
         all_stops.push(all_stops[0]); // Add the starting stop at the end to complete the loop
     }
@@ -177,7 +178,7 @@ function get_stops(route_id) {
 
 function print_stops(stopsList) {
     for (let i = 0; i < stopsList.length; i++) {
-        console.log(i + 1 + ". " + stopsList[i]);
+        console.log(i + 1 + ". " + stopsList[i][1]);
     }
 }
 
@@ -198,7 +199,7 @@ function toTime(time) {
  * @param {string} stringDate 
  * @returns {Date} Date object
  */
-function toDate(stringDate) {
+function to_date(stringDate) {
     // from YYYYMMDD to Date object
     let year = stringDate.substring(0, 4);
     let month = stringDate.substring(4, 6);
@@ -206,6 +207,50 @@ function toDate(stringDate) {
     //console.log(year, month, day);
     return new Date(year + "-" + month + "-" + day);
 }
+function find_trips(DF, time, start_stop) {
+    const timeInMinutes = time.split(':').reduce((h, m) => h * 60 + +m);
+
+    const tripList = DF.extract(({ stop_name, arrival_time }) => {
+        if (stop_name.toLowerCase() !== start_stop.toLowerCase()) return false;
+
+        const arrivalInMinutes = arrival_time.split(':').reduce((h, m) => h * 60 + +m);
+
+        const timeDifference = arrivalInMinutes - timeInMinutes;
+        return timeDifference >= 0 && timeDifference <= 10;
+    });
+
+    return tripList;
+}
+
+function time_differ(startTime, endTime) {
+    const toSeconds = time => time.split(':').reduce((acc, val) => acc * 60 + +val, 0);
+
+    const differenceInSeconds = toSeconds(endTime) - toSeconds(startTime);
+
+    const hours = Math.floor(differenceInSeconds / 3600);
+    const minutes = Math.floor((differenceInSeconds % 3600) / 60);
+    const seconds = differenceInSeconds % 60;
+
+    return [hours, minutes, seconds].map(unit => String(unit).padStart(2, '0')).join(':');
+}
+
+
+// for testing purposes only
+function convertMillisecondsToTime(milliseconds) {
+    // Create a Date object from the milliseconds
+    const date = new Date(milliseconds);
+
+    // Extract hours, minutes, and seconds from the Date object
+    const hours = date.getUTCHours(); // getUTCHours() is used to get the hours in the UTC time zone
+    const minutes = date.getUTCMinutes(); // getUTCMinutes() is used to get the minutes in the UTC time zone
+    const seconds = date.getUTCSeconds(); // getUTCSeconds() is used to get the seconds in the UTC time zone
+
+    // Format the time as HH:mm:ss
+    const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+    return formattedTime;
+}
+
 
 // @ts-check
 async function main() {
@@ -224,7 +269,7 @@ async function main() {
         let stopsList = [];
 
         try {
-            routeShortName = "66" // await prompt("What Bus Route would you like to take?"); // 
+            routeShortName = "40" // await prompt("What Bus Route would you like to take?"); // 
             // check if the bus route isvalid and exists in the routes.txt file
             //console.info("Expected type: " + .routetypeof routes_short_name);
             //console.log(joinedDf.getData().length);
@@ -241,8 +286,9 @@ async function main() {
             continue;
         }
         // print all stops for the bus route from route_url
-        joinedDf.filter('route_id', route_id);
-        console.info("Joined DF length:", joinedDf.getData().length);
+        console.info("Joined DF length (before) - with route_id:", joinedDf.getData().length);
+        joinedDf.filter('route_id', route_id); 
+        console.info("Joined DF length (after):", joinedDf.getData().length);
         stopsList = get_stops(route_id);
         print_stops(stopsList);
         // make stopsList as tuple with index and stop name
@@ -250,7 +296,7 @@ async function main() {
         while (true) {
             let [start_stop, end_stop] = [];
             try {
-                let startEnd = "1 - 2"; // await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // 
+                let startEnd = "2 - 7"; // await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // 
                 [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim()).map(Number);
                 //console.info("Start Stop:", start_stop);
                 //console.info("End Stop:", end_stop);
@@ -303,57 +349,81 @@ async function main() {
                         continue;
                     }
 
-                    // get specific date and time that the user wants to take the bus
-                    const approximate_time = new Date(date);
-                    approximate_time.setHours(hour + BRISBANE_TIMEZONE, minute, 0, 0);
-                    console.info("Approximate Time:", approximate_time);
-
+                    let formattedDate = dateStr.replace(/-/g, ""); // remove the hyphens to match the format in the calendar_dates.txt file
+                    const minutes = hour * 60 + minute;
                     // get the day of the week
-                    const dayOfWeek = daysOfWeek[approximate_time.getDay()];
+                    const dayOfWeek = daysOfWeek[date.getDay()];
                     console.info("Day of the week:", dayOfWeek);
 
                     // print to verify the user input is correct
                     console.info("route_id:", route_id, "date:", date, "start_stop:", start_stop, "end_stop:", end_stop, "time:", time);
                     
-                    if (Number(start_stop) - Math.floor(stopsList.length / 2) > 0) {  
-                        tripsDF.filter('direction_id', '1');
-                    } else {
-                        tripsDF.filter('direction_id', '0');
-                    }
-                    // joinedDf.join(tripsDF, 'route_id');
-                    // console.info("Joined DF length:", joinedDf.getData().length);
+                    console.info("tripsDF length (before) - with direction id", tripsDF.getData().length);
+                    if (!isLoopRoute && (start_stop > Math.floor(stopsList.length / 2))) {
+                            tripsDF.filter('direction_id', '1');
+                        } else {
+                            tripsDF.filter('direction_id', '0');
+                        }
+                    console.info("tripsDF length (after):", tripsDF.getData().length);
 
-                    // let service_ids = joinedDf.getData().map(route => route.service_id);
-                    // service_ids = [...new Set(service_ids)];
-                    // console.info("Service IDs length:", service_ids.length);
-                    // let trip_ids = tripsDF.getData().map(trip => trip.trip_id);
-
-                    // let filteredStopTimes = stopTimesDF.getData().filter(stop => {
-                    //     return stop.trip_id === trip_ids[0] && stop.stop_id === stopsList[start_stop - 1];
-                    // });
+                    console.info("Calendar DF DF length (before):", stopTimesDF.getData().length);
+                    calendarDF.join(calendarDatesDF, 'service_id'); // calendarDF + calendarDatesDF
+                    console.info("Calendar DF length (after):", calendarDF.getData().length);
                     
-
-                    stopTimesDF.join(stopsDF, 'stop_id');
-                    console.info("Stop Times DF length:", stopTimesDF.getData().length);
-                    
-                    console.info("Calendar DF length:", calendarDF.getData().length);
-                    console.info("Calendar Dates DF length:", calendarDatesDF.getData().length);
-                    calendarDF.join(calendarDatesDF, 'service_id'); 
-                    console.info("after, Calendar DF length:", calendarDF.getData().length);
-
+                    console.info("Calendar Dates DF length (before):", calendarDatesDF.getData().length);
                     calendarDF.filterBy(cal => {
-                        let startDate = toDate(cal.start_date);
-                        let endDate = toDate(cal.end_date);
+                        let startDate = to_date(cal.start_date);
+                        let endDate = to_date(cal.end_date);
+                        let exceptionDate = calendarDatesDF.findBy(eDate => eDate.service_id === cal.service_id && to_date(eDate.date) === date);
+                        
+                        if (exceptionDate) {
+                            if (cal.exception_type === "1") {
+                                return true; // add the exception dates
+                            }
+                            if (cal.exception_type === "2") {
+                                return false; // remove the exception dates
+                            }
+                        }                        
                         return cal[dayOfWeek] === "1"
                             && date >= startDate
                             && date <= endDate;
-                    }); 
-                    console.info("Filtered Calendar DF length:", calendarDF.getData().length);                   
-
-                    joinedDf.join(stopTimesDF, 'trip_id');
-                    joinedDf.join(calendarDF, 'service_id');
-                    console.info("Joined DF:", joinedDf.getData());
+                    });                    
+                    console.info("Filtered Calendar DF length (after):", calendarDF.getData().length);
                     
+                    
+                    console.info("Stop Times DF length (before):", stopTimesDF.getData().length);
+                    stopsDF.filterBy(stop => stop.stop_id === stopsList[start_stop - 1][0] || stop.stop_id === stopsList[end_stop - 1][0]);
+                    console.info("Filtered Stops DF length (after):", stopsDF.getData().length);
+
+                    joinedDf.join(tripsDF, 'route_id'); // routeDf + tripsDF
+                    console.info("Joined DF length (route_id):", joinedDf.getData().length);
+
+                    joinedDf.join(stopTimesDF, 'trip_id'); // routeDf + tripsDF + stopTimesDF
+                    console.info("Filtered joined DF length (trip_id):", joinedDf.getData().length);
+                    
+                    joinedDf.join(stopsDF, 'stop_id'); // routeDf + tripsDF + stopTimesDF + stopsDF
+                    console.info("Filtered joined DF length (stop_id):", joinedDf.getData().length);
+                    //console.info("Joined DF:", joinedDf.getData());
+
+                    joinedDf.join(calendarDF, 'service_id'); // routeDf + tripsDF + stopTimesDF + stopsDF + calendarDF + calendarDatesDF
+                    console.info("Filtered joined DF length (service_id):", joinedDf.getData().length);
+                    
+                    console.info("joinedDf length (before) - with start_stop:", joinedDf.getData().length);
+                    let startTimes = joinedDf.extractBy(stop => {
+                        // if the stop is the first stop, use departure_time instead of arrival_time
+                        let arrival_time = start_stop === 1 ? stop.departure_time : stop.arrival_time;
+                        //console.info("Arrival Time:", arrival_time);
+                        const arrivalList = arrival_time.split(':').map(Number)
+                        const arrivalInMinutes = arrivalList[0] * 60 + arrivalList[1];
+                        //console.info("Arrival Time in Minutes:", arrivalInMinutes, "Time in Minutes:", minutes);
+                        const timeDifference = arrivalInMinutes - minutes;
+                        return timeDifference >= 0 && timeDifference <= 10;
+                    });
+                    console.info("Filtered Stop Times DF length (after):", startTimes.length);
+
+                    let uniqueStartTimes = [...new Set(startTimes.map(stop => stop.trip_id))];
+                    console.info("Start Times length:", startTimes.length);
+
                     while (true) {
                         try {
                             let restart = prompt("Would you like to search again?");

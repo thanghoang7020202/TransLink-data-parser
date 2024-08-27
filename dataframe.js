@@ -98,28 +98,28 @@ export function csvDF() {
         join: function (df, field) {
             let joinedData = [];
             let otherData = df.getData();
-            // if (otherData.length < data.length) {
-            //     data.forEach(row => {
-            //         let matchingRow = otherData.find(otherRow => otherRow[field] === row[field]);
-            //         //console.log(matchingRow);
-            //         if (matchingRow) {
-            //             joinedData.push({ ...row, ...matchingRow });
-            //         }
-            //     });
-            // } else {
-            //     otherData.forEach(row => {
-            //         let matchingRow = data.find(otherRow => otherRow[field] === row[field]);
-            //         if (matchingRow) {
-            //             joinedData.push({ ...row, ...matchingRow });
-            //         }
-            //     });
-            // }
+            if (otherData.length < data.length) {
+                data.forEach(row => {
+                    let matchingRow = otherData.find(otherRow => otherRow[field] === row[field]);
+                    //console.log(matchingRow);
+                    if (matchingRow) {
+                        joinedData.push({ ...row, ...matchingRow });
+                    }
+                });
+            } else {
+                otherData.forEach(row => {
+                    let matchingRow = data.find(otherRow => otherRow[field] === row[field]);
+                    if (matchingRow) {
+                        joinedData.push({ ...row, ...matchingRow });
+                    }
+                });
+            }
             // optimized version
-            const [smaller, larger] = data.length < otherData.length ? [data, otherData] : [otherData, data];
-            const smallerMap = new Map(smaller.map(row => [row[field], row])); // create a map of the smaller data
-            joinedData = larger.map(row => ({ ...row, ...smallerMap.get(row[field]) })); // join the data
+            // const [smaller, larger] = data.length < otherData.length ? [data, otherData] : [otherData, data];
+            // const smallerMap = new Map(smaller.map(row => [row[field], row])); // create a map of the smaller data
+            // joinedData = larger.map(row => ({ ...row, ...smallerMap.get(row[field]) })); // join the data
 
-            // data = joinedData;
+            data = joinedData;
             return this;
         },
 
@@ -130,13 +130,13 @@ export function csvDF() {
          * @param value
          * @returns
          */
-        filter(field, value) {
+        filter:function (field, value) {
             data = data.filter(row => row[field] === value);
             return this;
         },
 
-        filterBy: function (condition) {
-            data = data.filter(condition);
+        filterBy: function (lambda) {
+            data = data.filter(lambda);
             return this;
         },
 
@@ -145,8 +145,12 @@ export function csvDF() {
          * @param {string} field field to filter on
          * @param value
          */
-        find(field, value) {
+        find: function (field, value) {
             return data.find(row => row[field] === value);
+        },
+
+        findBy: function (lambda) {
+            return data.find(lambda);
         },
 
         /**
@@ -165,10 +169,10 @@ export function csvDF() {
          * @param {*} value 
          * @returns 
          */
-        extractList: function (field, list) {
-            return data.filter(row => list.includes(row[field]));
+        extractBy: function (lambda) {
+            return data.filter(lambda);
         },
-
+        
         /**
          * Projects the data to a single field
          * @param {string} field the field to map to 
@@ -192,6 +196,14 @@ export function csvDF() {
                 return row;
             });
             return this;
-        }
+        },
+
+        addCollumn: function (field, value) {
+            data = data.map(row => {
+                row[field] = value;
+                return row;
+            });
+            return this;
+        },
     }
 }
