@@ -191,18 +191,6 @@ function print_stops(stopsList) {
 }
 
 /**
- * Convert time string to Date object
- * @param {string} time
- * @returns {number} time in milliseconds
- */
-function toTime(time) {
-    let [hour, minute, second] = time.split(":").map(Number);
-    let date = new Date();
-    date.setHours(hour, minute, second, 0);
-    return date.getTime();
-}
-
-/**
  * Convert string date to Date object in the format YYYYMMDD
  * @param {string} stringDate 
  * @returns {Date} Date object
@@ -240,6 +228,9 @@ function time_differ(startTime, endTime) {
 
     const differenceInSeconds = toSeconds(endTime) - toSeconds(startTime);
 
+    if (differenceInSeconds < 0) {
+        throw new Error("End time is before start time");
+    }
     const hours = Math.floor(differenceInSeconds / 3600);
     const minutes = Math.floor((differenceInSeconds % 3600) / 60);
     const seconds = differenceInSeconds % 60;
@@ -282,7 +273,7 @@ async function main() {
         let stopsList = [];
 
         try {
-            routeShortName = "40" // await prompt("What Bus Route would you like to take?"); // 
+            routeShortName = "66" // await prompt("What Bus Route would you like to take?"); // 
             // check if the bus route isvalid and exists in the routes.txt file
             //console.info("Expected type: " + .routetypeof routes_short_name);
             //console.log(joinedDf.getData().length);
@@ -432,7 +423,7 @@ async function main() {
                         const timeDifference = arrivalInMinutes - minutes;
                         return timeDifference >= 0 && timeDifference <= 10;
                     });
-                    console.info("Filtered Stop Times DF", startTimes)
+                    //console.info("Filtered Stop Times DF", startTimes)
 
                     //convert startTimes to a list of objects
 
@@ -445,20 +436,47 @@ async function main() {
                         // if the end stop is not reached, continue to the next stop
                         let stop = element.stop_name;
                         let arrival_time = element.arrival_time;
+                        console.info("Start Stop:", stop, "Start Stop Time:", arrival_time);
                         for (let i = start_stop; i < end_stop; i++) {
                             let nextStop = stopsList[i][1];
-                            let nextStopTimes = joinedDf.extractBy(stop => stop.stop_name === nextStop);
+                            let nextStopTimes = joinedDf.extractBy(stop => stop.stop_name === nextStop && stop.trip_id === element.trip_id);
                             for (let nextStopTime of nextStopTimes) {
-                                if (toTime(nextStopTime.arrival_time) > toTime(arrival_time)) {
-                                    stop = nextStop;
-                                    arrival_time = nextStopTime.arrival_time;
+                                try {
+                                    time_differ(arrival_time, nextStopTime.arrival_time);
+                                    if (estimatedTime === "00:00:00") {
+                                        continue; // break the loop if the time difference is 0
+                                    }
+                                } catch (error) {
+                                    //console.error("Error:", error.message);
+                                    continue; // skip to the next stop if the time difference is negative
                                 }
+                                stop = nextStop;
+                                arrival_time = nextStopTime.arrival_time;   
                             }
                         }
+                        // stopsList.slice(start_stop, end_stop).forEach(nextStopData => {
+                        //     const nextStop = nextStopData[1];
+                        //     const nextStopTimes = joinedDf.filter(
+                        //         stop => stop.stop_name === nextStop && stop.trip_id === element.trip_id
+                        //     );
+                        
+                        //     nextStopTimes.some(nextStopTime => {
+                        //         try {
+                        //             time_differ(arrival_time, nextStopTime.arrival_time);
+                                    
+                        //             stop = nextStop;
+                        //             arrival_time = nextStopTime.arrival_time;
+                        //             return false; // continue processing nextStopTimes
+                        //         } catch (error) {
+                        //             // Skip to the next stop if the time difference is negative
+                        //             return true; // break the loop if there's an error
+                        //         }
+                        //     });
+                        // });
                         console.info("Stop:", stop, "Start Stop Time:", time.concat(":00") , ",and End Stop Time:", arrival_time);
                         estimatedTime = time_differ(time.concat(":00"), arrival_time);
-                        
-                        let liveTripUp = trip_updates.entity.find(trip => trip.trip_id === element.trip_id);
+                    
+                        let liveTripUp = ;
                         let liveArrivalTime;
                         let livePosition;
 
@@ -512,7 +530,7 @@ async function main() {
                                     vehicle_positions,
                                     alerts
                                 };
-                                await save_cache(cacheKey, allData);
+                                await save_cache("all", allData);
                                 
                                 break;
                             }
