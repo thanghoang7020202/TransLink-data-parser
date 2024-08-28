@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import fs, {promises as fsPromises} from 'fs';
 import {parse} from 'csv-parse';
 import { csvDF } from './dataframe.js';
+import { join } from 'path';
 
 // Read the CSV file and parse it to JSON object
 import promptsync from 'prompt-sync'; // prompt-sync module
@@ -17,22 +18,11 @@ const messageReadCache = (filenameAppend) => `Read a JSON cache file called "${f
 const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const BRISBANE_TIMEZONE = 10; // Brisbane timezone is UTC+10
 const TEN_MINUTES = 600000; // 10 minutes in milliseconds
+
 let isLoopRoute = false;
-
-// get the data from the static-data folder
-// const agency = await readFile('./static-data/agency.txt');
-// const calendar_dates = await readFile('./static-data/calendar_dates.txt');
-// const calendar = await readFile('./static-data/calendar.txt');
-// const feed_info = await readFile('./static-data/feed_info.txt');
-// const temp = await readFile('./static-data/routes.txt');
-// const routes = temp.filter(route => route.route_type === "3"); // get only bus routes
-// //console.info("Bus Routes:", routes);
-// const shapes = readFile('./static-data/shapes.txt');
-// const stop_times = await readFile('./static-data/stop_times.txt');
-// const stops = await readFile('./static-data/stops.txt');
-// const trips = await readFile('./static-data/trips.txt');
-
-
+let trip_updates = [];
+let vehicle_positions = [];
+let alerts = [];
 
 let joinedDf = await csvDF().loadCSV('./static-data/routes.txt');
 let tripsDF = await csvDF().loadCSV('./static-data/trips.txt');
@@ -54,7 +44,7 @@ let calendarDatesDF = await csvDF().loadCSV('./static-data/calendar_dates.txt');
  * @param {string} filenameAppend - The string to append to the JSON filename.
  * @param {string} data - The string containing JSON data to save.
  */
-async function saveCache(filenameAppend, data) {
+async function save_cache(filenameAppend, data) {
     try {
         filenameAppend = CACHE_FOLDER + filenameAppend + ".json";
         await fsPromises.writeFile(filenameAppend, JSON.stringify(data));
@@ -69,17 +59,36 @@ async function saveCache(filenameAppend, data) {
  * @param {string} filenameAppend - The string to append to the JSON filename.
  * @returns {string} The string containing JSON data from the cache file.
  */
-async function readCache(filenameAppend) {
+async function read_cache(filenameAppend) {
     try {
         filenameAppend = CACHE_FOLDER + filenameAppend + ".json";
         const data = await fsPromises.readFile(filenameAppend, 'utf8');
         console.log(messageReadCache(filenameAppend));
         return data;
     } catch(error) {
-        console.log("The error is: ", error);
+        console.log("The cache file does not exist in cache-data folder or could not be read.");
+        console.log("Starting fresh with API data.");
     }
     return null;
 }
+
+/**
+ * This function will clear the cache directory.
+ * @returns {void}
+ */
+function cache_prune() {
+    try {
+        const files = fs.readdirSync(CACHE_FOLDER);
+        for (const file of files) {
+            fs.unlinkSync(path.join(cacheDir, file));
+            console.info("Deleted file:", file);
+        }
+        console.info("Cache directory cleared.");
+    } catch (error) {
+        console.error("Cache prune error:", error);
+    }
+}
+
 
 /**
  * Fetch data from the API
@@ -98,42 +107,41 @@ async function fetch_data(api_url) {
     return await response.json(); // .json() returns a promise
 }
 
-// Initialize data variables for trip_updates, vehicle_positions, and alerts
-let allData = await readCache("all");
-let trip_updates = [];
-let vehicle_positions = [];
-let alerts = [];
+async function initializeData(tripUpdatesUrl, vehiclePositionsUrl, alertsUrl, cacheKey = "all") {
+    let trip_updates = [];
+    let vehicle_positions = [];
+    let alerts = [];
 
-if (allData) {
-    try {
-        allData = JSON.parse(allData);  // Parse the JSON string into an object
-        trip_updates = allData.trip_updates || [];
-        vehicle_positions = allData.vehicle_positions || [];
-        alerts = allData.alerts || [];
+    let allData = await read_cache(cacheKey);
 
-        //console.info("trip_updates:", JSON.stringify(trip_updates));
-    } catch (error) {
-        console.error("Error parsing JSON from cache file:", error.message);
+    if (allData) {
+        try {
+            allData = JSON.parse(allData); // Parse the JSON string into an object
+            trip_updates = allData.trip_updates || [];
+            vehicle_positions = allData.vehicle_positions || [];
+            alerts = allData.alerts || [];
+        } catch (error) {
+            console.error("Error parsing JSON from cache file:", error.message);
+        }
+    } else {
+        // If cache files do not exist, fetch data from the API
+        trip_updates = await fetch_data(tripUpdatesUrl);
+        vehicle_positions = await fetch_data(vehiclePositionsUrl);
+        alerts = await fetch_data(alertsUrl);
+
+        allData = {
+            trip_updates,
+            vehicle_positions,
+            alerts
+        };
+
+        // Store JSON objects into cache files
+        await save_cache(cacheKey, allData);
     }
-} else {// If cache files do not exist, fetch data from API
 
-    // get the data from the API
-    trip_updates = await fetch_data(TRIP_UPDATES_URL);
-    vehicle_positions = await fetch_data(VEHICLE_POSITIONS_URL);
-    alerts = await fetch_data(ALERTS_URL);
-
-    allData = {
-        "trip_updates": trip_updates,
-        "vehicle_positions": vehicle_positions,
-        "alerts": alerts
-    }
-    // Store JSON objects into cache files
-    await saveCache("all", allData);
-
-    //console.log(dataAll);
-    //console.log(dataTop);
-
+    return [ trip_updates, vehicle_positions, alerts ];
 }
+
 
 /**
  * Get all stops of a route
@@ -222,8 +230,13 @@ function find_trips(DF, time, start_stop) {
     return tripList;
 }
 
+/**
+ * Calculate the time difference between two times in HH:MM:SS format
+ * @param {string} startTime 
+ * @param {string} endTime 
+ */
 function time_differ(startTime, endTime) {
-    const toSeconds = time => time.split(':').reduce((acc, val) => acc * 60 + +val, 0);
+    const toSeconds = time => time.split(':').reduce((acc, time) => 60 * acc + +time, 0);    
 
     const differenceInSeconds = toSeconds(endTime) - toSeconds(startTime);
 
@@ -296,7 +309,7 @@ async function main() {
         while (true) {
             let [start_stop, end_stop] = [];
             try {
-                let startEnd = "2 - 7"; // await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // 
+                let startEnd =  await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // "2 - 7"; //
                 [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim()).map(Number);
                 //console.info("Start Stop:", start_stop);
                 //console.info("End Stop:", end_stop);
@@ -313,7 +326,7 @@ async function main() {
             
             while (true) {
                 try {
-                    dateStr = "2024-08-19"//await prompt("What date will you take the route?"); // 
+                    dateStr = await prompt("What date will you take the route?"); // "2024-08-19"//
                     // check if the time is valid: Year, month & day in https://tc39.es/ecma262/#sec-date-time-string-format (YYYY-MM-DD)
                     if (!dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
                         throw new Error("Invalid Time");
@@ -333,7 +346,7 @@ async function main() {
                 
                 while (true) {
                     try {
-                        time = "06:57"//await prompt("What time will you leave?"); // 
+                        time = await prompt("What time will you leave?"); // "06:57"//
                         // check if the time is valid: Hour & minutes in 24 hour time in https://tc39.es/ecma262/#sec-date-time-stringformat (HH:mm)
                         if (!time.match(/^\d{2}:\d{2}$/)) {
                             throw new Error("Invalid Time");
@@ -419,16 +432,88 @@ async function main() {
                         const timeDifference = arrivalInMinutes - minutes;
                         return timeDifference >= 0 && timeDifference <= 10;
                     });
-                    console.info("Filtered Stop Times DF length (after):", startTimes.length);
+                    console.info("Filtered Stop Times DF", startTimes)
 
-                    let uniqueStartTimes = [...new Set(startTimes.map(stop => stop.trip_id))];
-                    console.info("Start Times length:", startTimes.length);
+                    //convert startTimes to a list of objects
+
+                    let objects = [];
+                    startTimes.forEach(element => {
+                        let obj = {};
+                        let estimatedTime;
+                        // run through each stop in stopList until the end stop such that the arrive time of that stop of following stop is > previous stop in joinedDf.
+                        // if the end stop is reached, calculate the time difference between the arrival time of the end stop and the start stop
+                        // if the end stop is not reached, continue to the next stop
+                        let stop = element.stop_name;
+                        let arrival_time = element.arrival_time;
+                        for (let i = start_stop; i < end_stop; i++) {
+                            let nextStop = stopsList[i][1];
+                            let nextStopTimes = joinedDf.extractBy(stop => stop.stop_name === nextStop);
+                            for (let nextStopTime of nextStopTimes) {
+                                if (toTime(nextStopTime.arrival_time) > toTime(arrival_time)) {
+                                    stop = nextStop;
+                                    arrival_time = nextStopTime.arrival_time;
+                                }
+                            }
+                        }
+                        console.info("Stop:", stop, "Start Stop Time:", time.concat(":00") , ",and End Stop Time:", arrival_time);
+                        estimatedTime = time_differ(time.concat(":00"), arrival_time);
+                        
+                        let liveTripUp = trip_updates.entity.find(trip => trip.trip_id === element.trip_id);
+                        let liveArrivalTime;
+                        let livePosition;
+
+                        if (liveTripUp) {
+                            const liveArrival = liveTripUp.tripUpdate.stopTimeUpdate.find(
+                                stopUpdate => stopUpdate.stopId === trip.stop_id
+                            );
+                            if (liveArrival && liveArrival.arrival && liveArrival.arrival.time) {
+                                liveArrivalTime = convertToAEST(liveArrival.arrival.time);
+                            }
+                        }
+                    
+                        const liveVePos = vehicle_positions.entity.find(entity => entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.tripId === element.trip_id);
+                    
+                        if (liveVePos && liveVePos.vehicle.position) {
+                            const { latitude, longitude } = liveVePos.vehicle.position;
+                            livePosition = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                        }
+                        
+                        // create an object with the route short name, trip_id, route long name, service_id, headsign, scheduled arrival time, live arrival time, live position, and estimated time
+                        obj = {
+                            "Route Short Name": routeShortName,
+                            "Trip ID": element.trip_id,
+                            "Route Long Name": element.route_long_name,
+                            "Service ID": element.service_id,
+                            "Headsign": element.trip_headsign,
+                            "Scheduled Arrival Time": element.arrival_time,
+                            "Live Arrival Time": liveArrivalTime,
+                            "Live Position": livePosition,
+                            "Estimated Time": estimatedTime
+                        };
+                        objects.push(obj);
+
+                    });
+                    console.table(objects);
 
                     while (true) {
                         try {
                             let restart = prompt("Would you like to search again?");
                             // case insensitive
                             if (restart.toLowerCase() === "yes" || restart.toLowerCase() === "y") {
+                                cache_prune();
+                                // re-read the cache files
+                                trip_updates = await fetch_data(TRIP_UPDATES_URL);
+                                vehicle_positions = await fetch_data(VEHICLE_POSITIONS_URL);
+                                alerts = await fetch_data(ALERTS_URL);
+
+                                // Store JSON objects into cache files
+                                let allData = {
+                                    trip_updates,
+                                    vehicle_positions,
+                                    alerts
+                                };
+                                await save_cache(cacheKey, allData);
+                                
                                 break;
                             }
                             if (restart.toLowerCase() === "no" || restart.toLowerCase() === "n") {
@@ -436,6 +521,7 @@ async function main() {
                                 return;
                             }
                         } catch (error) {
+                            console.error(error.message);
                             console.error("Please enter a valid option.");
                         }
                     }
@@ -449,4 +535,5 @@ async function main() {
 
 }
 
+[trip_updates, vehicle_positions, alerts] = await initializeData(TRIP_UPDATES_URL, VEHICLE_POSITIONS_URL, ALERTS_URL, "all");
 main();
