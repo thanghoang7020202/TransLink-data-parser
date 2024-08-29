@@ -514,17 +514,20 @@ async function main() {
                         let obj = {};                                   // create an object to store the trip details
                         let estimatedTime = "null"                      // estimated time to reach the end stop from the start stop 
                         console.info("element[0].arrival_time:", element[0].arrival_time, "element[1].arrival_time:", element[1].arrival_time);
+                        if (to_minutes(element[0].arrival_time) > to_minutes(element[1].arrival_time)) {
+                            continue; // skip and go to the next pair
+                        }
                         estimatedTime = time_differ(element[0].arrival_time, element[1].arrival_time); // calculate the estimated time to reach the end stop from the start stop
                         console.info("Estimated Time:", estimatedTime);
 
-                        console.info(element.trip_id);
+                        console.info(element[0].trip_id, trip_updates.entity[0].tripUpdate.trip.tripId);
                         if (trip_updates.entity == undefined || vehicle_positions.entity == undefined) {
                             console.error("No trip updates or vehicle positions available.");
                         } else {
                             console.info("Trip Updates:", trip_updates.entity[0].id);
                         }
 
-                        let liveTripUp = trip_updates.entity.find(entity => entity.id === element.trip_id); // entity.id === entity.tripUpdate.trip.tripId
+                        let liveTripUp = trip_updates.entity.find(entity => entity.tripUpdate.trip.tripId === element[0].trip_id); // entity.id === entity.tripUpdate.trip.tripId
                         console.info("Live Trip Updates:", liveTripUp);
                         let liveArrivalTime;        // live arrival time at the stop
                         let livePosition;           // live position of the vehicle
@@ -540,7 +543,7 @@ async function main() {
                             console.info("Live Arrival Time:", liveArrivalTime);
                         }
                     
-                        const liveVePos = vehicle_positions.entity.find(entity => entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.tripId === element.trip_id);
+                        const liveVePos = vehicle_positions.entity.find(entity => entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.tripId === element[0].trip_id);
                         console.info("Live Vehicle Position:", liveVePos);
 
                         if (liveVePos && liveVePos.vehicle.position) {
