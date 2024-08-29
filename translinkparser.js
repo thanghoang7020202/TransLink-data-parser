@@ -164,6 +164,8 @@ async function triggerEveryFiveMinutes() {
     vehicle_positions = await fetch_data(VEHICLE_POSITIONS_URL);
     alerts = await fetch_data(ALERTS_URL);
 
+
+
     // Store JSON objects into cache files
     let allData = {
         trip_updates,
@@ -269,9 +271,6 @@ function time_differ(startTime, endTime) {
 
     const differenceInSeconds = toSeconds(endTime) - toSeconds(startTime);
 
-    if (differenceInSeconds < 0) {
-        throw new Error("End time is before start time");
-    }
     const hours = Math.floor(differenceInSeconds / 3600);
     const minutes = Math.floor((differenceInSeconds % 3600) / 60);
     const seconds = differenceInSeconds % 60;
@@ -470,64 +469,80 @@ async function main() {
                     console.info("Filtered joined DF length (service_id):", joinedDf.getData().length);
                     
                     console.info("joinedDf length (before) - with start_stop:", joinedDf.getData().length);
-                    let startTimes = joinedDf.extractBy(stop => {
+                    let startTimes = joinedDf.extractBy(stop => {               // get all the valid stops
                         // if the stop is the first stop, use departure_time instead of arrival_time
-                        let arrival_time = start_stop === 1 ? stop.departure_time : stop.arrival_time;
+                        
+                        let arrival_time = (start_stop === 1) ? stop.departure_time : stop.arrival_time;
+
                         //console.info("Arrival Time:", arrival_time);
                         const arrivalList = arrival_time.split(':').map(Number)
                         const arrivalInMinutes = arrivalList[0] * 60 + arrivalList[1];
-                        //console.info("Arrival Time in Minutes:", arrivalInMinutes, "Time in Minutes:", minutes);
+                        
                         const timeDifference = arrivalInMinutes - minutes;
-                        return timeDifference >= 0 && timeDifference <= 10;
+                        //console.info("Arrival Time in Minutes:", arrivalInMinutes, "Time in Minutes:", minutes, "Time Difference:", timeDifference);
+                        return timeDifference >= 0 && timeDifference < 10 && stop.stop_name.toLowerCase() === stopsList[start_stop - 1].toLowerCase();
                     });
-                    console.info("startTimes:", startTimes);
+                    console.info("startTimes length:", startTimes.length);
 
-                    //convert startTimes to a list of objects
+                    // sort the trips by arrival time and trip id
+                    //joinedDf.sortBy('arrival_time').sortBy('trip_id');
+                    //console.info("Joined DF length (after) - with start_stop:", joinedDf.getData().length);
 
+                    // make a extractPairs list that stores each pair of corresponding [start stop, end stop] for each trip
+                    startTimes = startTimes.map(stop => stop.arrival_time);
+                    let extractPairs = [];
+
+                    // Iterate through each row `a` in `joinedDf`
+                    joinedDf.getData().forEach((a) => {
+                        // For each `a`, iterate through each row `b` in `joinedDf`
+                        joinedDf.getData().forEach((b) => {
+                            // Check if the pair (a, b) satisfies the given conditions
+                            if (a.trip_id === b.trip_id && 
+                                a.stop_name.toLowerCase() === stopsList[start_stop - 1].toLowerCase() && 
+                                b.stop_name.toLowerCase() === stopsList[end_stop - 1].toLowerCase() &&
+                                startTimes.includes(a.arrival_time)) {
+                                // If conditions are met, add the pair [a, b] to extractPairs
+                                extractPairs.push([a, b]);
+                            }
+                        });
+                    });
+                    
+                    console.info("Extract Pairs:", extractPairs);
+                    
                     let objects = [];
-                    startTimes.forEach((element, index) => { // for each trip
+                    extractPairs.forEach(element => { // for each trip
                         let obj = {};                                   // create an object to store the trip details
                         let estimatedTime = "null"                      // estimated time to reach the end stop from the start stop 
+                        console.info("element[0].arrival_time:", element[0].arrival_time, "element[1].arrival_time:", element[1].arrival_time);
+                        estimatedTime = time_differ(element[0].arrival_time, element[1].arrival_time); // calculate the estimated time to reach the end stop from the start stop
+                        console.info("Estimated Time:", estimatedTime);
 
-                        let stop = element.stop_name;
-                        let start_timestamp = element.arrival_time;         // arrival time at the start stop
-                        let end_timestamp = start_timestamp               // arrival time at the end stop
-                        
-                        console.info("Start Stop:", stop, "Start Stop Time:", start_timestamp);
-                        
-                        let dropStop = stopsList[end_stop - 1];        // get the details of the drop stop
-                        // get the details of the next stop
-                        let nextStopTimes = joinedDf.extractBy(stop => stop.stop_name.toLowerCase() === dropStop.toLowerCase() 
-                            && stop.trip_id === element.trip_id);
-                        
-                        console.info("Next Stop Times length:", nextStopTimes.length);
+                        console.info(element.trip_id);
+                        if (trip_updates.entity == undefined || vehicle_positions.entity == undefined) {
+                            console.error("No trip updates or vehicle positions available.");
+                        } else {
+                            console.info("Trip Updates:", trip_updates.entity[0].id);
+                        }
 
-                        for (let nextStopTime of nextStopTimes) {
-                            stop = dropStop;                            // update the current stop to the next stop
-                            end_timestamp = nextStopTime.arrival_time;   // update the arrival time to the next stop's arrival time  
-                        }
-                        if (to_minutes(start_timestamp) > to_minutes(end_timestamp)) {
-                        
-                        }
-                        console.info("Stop:", stop, "Start Stop Time:", start_timestamp, ",and End Stop Time:", end_timestamp);
-                        
-                        estimatedTime = time_differ(start_timestamp, end_timestamp); // calculate the estimated time to reach the end stop from the start stop
-                    
-                        let liveTripUp = trip_updates.entity.find(trip => trip.trip_id === element.trip_id);
-                        let liveArrivalTime;
-                        let livePosition;
+                        let liveTripUp = trip_updates.entity.find(entity => entity.id === element.trip_id); // entity.id === entity.tripUpdate.trip.tripId
+                        console.info("Live Trip Updates:", liveTripUp);
+                        let liveArrivalTime;        // live arrival time at the stop
+                        let livePosition;           // live position of the vehicle
 
                         if (liveTripUp) {
                             const liveArrival = liveTripUp.tripUpdate.stopTimeUpdate.find(
                                 stopUpdate => stopUpdate.stopId === trip.stop_id
                             );
+                            console.info("Live Arrival:", liveArrival, "Live Arrival:", liveArrival.arrival);
                             if (liveArrival && liveArrival.arrival && liveArrival.arrival.time) {
                                 liveArrivalTime = convertToAEST(liveArrival.arrival.time);
                             }
+                            console.info("Live Arrival Time:", liveArrivalTime);
                         }
                     
                         const liveVePos = vehicle_positions.entity.find(entity => entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.tripId === element.trip_id);
-                    
+                        console.info("Live Vehicle Position:", liveVePos);
+
                         if (liveVePos && liveVePos.vehicle.position) {
                             const { latitude, longitude } = liveVePos.vehicle.position;
                             livePosition = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
@@ -536,11 +551,11 @@ async function main() {
                         // create an object with the route short name, trip_id, route long name, service_id, headsign, scheduled arrival time, live arrival time, live position, and estimated time
                         obj = {
                             "Route Short Name": routeShortName,
-                            "Trip ID": element.trip_id,
-                            "Route Long Name": element.route_long_name,
-                            "Service ID": element.service_id,
-                            "Headsign": element.trip_headsign,
-                            "Scheduled Arrival Time": element.arrival_time,
+                            "Trip ID": element[0].trip_id,
+                            "Route Long Name": element[0].route_long_name,
+                            "Service ID": element[0].service_id,
+                            "Headsign": element[0].trip_headsign,
+                            "Scheduled Arrival Time": element[0].arrival_time,
                             "Live Arrival Time": liveArrivalTime,
                             "Live Position": livePosition,
                             "Estimated Time": estimatedTime
