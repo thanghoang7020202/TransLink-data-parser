@@ -54,20 +54,6 @@ export function csvDF() {
                 return 0;
             });
             return this;
-        },        
-
-        /**
-         * Capitalizes the first letter of each value in a specified field.
-         * 
-         * @param {string} field - The field name to capitalize.
-         * @returns {Object} The current instance for chaining.
-         */
-        capitaliseFirstLetter: function (field) {
-            data = data.map(row => {
-                row[field] = row[field].charAt(0).toUpperCase() + row[field].slice(1);
-                return row;
-            });
-            return this;
         },
 
         /**
@@ -171,39 +157,6 @@ export function csvDF() {
          */
         extractBy: function (lambda) {
             return data.filter(lambda);
-        },
-        
-        /**
-         * Projects the data to a single field
-         * @param {string} field the field to map to 
-         * @returns 
-         */
-        project: function (field) {
-            return data.map(row => row[field]);
-        },
-
-        include: function (field) {
-            data = data.map(row => {
-                row[field] = true;
-                return row;
-            });
-            return this;
-        },
-
-        exclude: function (field) {
-            data = data.map(row => {
-                row[field] = false;
-                return row;
-            });
-            return this;
-        },
-
-        addCollumn: function (field, value) {
-            data = data.map(row => {
-                row[field] = value;
-                return row;
-            });
-            return this;
-        },
+        }
     }
 }

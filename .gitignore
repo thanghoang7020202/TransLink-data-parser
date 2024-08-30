@@ -2,4 +2,7 @@
 vy.js
 codetest.js
 *copy.js
-./cached-data/all.json
+cached-data/all.json
+# ignore all the files in node_modules
+node_modules/
+coverage/

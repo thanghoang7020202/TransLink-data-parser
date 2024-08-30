@@ -2,19 +2,24 @@
   "name": "a1",
   "version": "1.0.0",
   "main": "translinkparser.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest . --coverage"
   },
   "keywords": [],
-  "author": "",
+  "author": "Cao Quoc Thang Hoang - 47594876",
   "license": "ISC",
+  "jest": {
+    "transform": {}
+  },
   "dependencies": {
     "csv-parse": "^5.5.6",
     "csv-parser": "^3.0.0",
     "node-fetch": "^2.7.0",
     "prompt-sync": "^4.2.0"
   },
-  "type": "module",
-  "devDependencies": {},
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
 }

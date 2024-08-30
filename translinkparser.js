@@ -4,6 +4,7 @@ import fs, {promises as fsPromises} from 'fs';
 import {parse} from 'csv-parse';
 import { csvDF } from './dataframe.js';
 import { join } from 'path';
+import { to_date, time_differ, to_minutes, convertToBrisbaneTime } from './utils.js'; // Time related utility functions
 
 // Read the CSV file and parse it to JSON object
 import promptsync from 'prompt-sync'; // prompt-sync module
@@ -11,7 +12,6 @@ const prompt = promptsync({sigint: true} );
 
 const TRIP_UPDATES_URL = "http://127.0.0.1:5343/gtfs/seq/trip_updates.json";
 const VEHICLE_POSITIONS_URL = "http://127.0.0.1:5343/gtfs/seq/vehicle_positions.json";
-const ALERTS_URL = "http://127.0.0.1:5343/gtfs/seq/alerts.json";
 const CACHE_FOLDER = "./cached-data/";
 const messageSaveCache = (filenameAppend) => `Saved a JSON cache file called "${filenameAppend}".`;
 const messageReadCache = (filenameAppend) => `Read a JSON cache file called "${filenameAppend}".`;
@@ -19,6 +19,7 @@ const DAYS_OF_WEEK = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'f
 const BRISBANE_TIMEZONE = 10; // Brisbane timezone is UTC+10
 const TEN_MINUTES = 600000; // 10 minutes in milliseconds
 const FIVE_MINUTE_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
+let firstStart = true; // first run of the program
 
 let isLoopRoute = false;
 let trip_updates = [];
@@ -32,7 +33,9 @@ let stopsDF;
 let calendarDF;
 let calendarDatesDF;
 
-
+/**
+ * Load the static data from the CSV files
+ */
 async function staticData() {
     joinedDf = await csvDF().loadCSV('./static-data/routes.txt');
     tripsDF = await csvDF().loadCSV('./static-data/trips.txt');
@@ -67,14 +70,14 @@ async function save_cache(filenameAppend, data) {
 /**
  * This function will read a JSON cache file with the specified filename.
  * @param {string} filenameAppend - The string to append to the JSON filename.
- * @returns {string} The string containing JSON data from the cache file.
+ * @returns {string} - The string containing JSON data.
  */
 async function read_cache(filenameAppend) {
     try {
         filenameAppend = CACHE_FOLDER + filenameAppend + ".json";
         const data = await fsPromises.readFile(filenameAppend, 'utf8');
         console.log(messageReadCache(filenameAppend));
-        return data;
+        return JSON.parse(data);
     } catch(error) {
         console.log("The cache file does not exist in cache-data folder or could not be read.");
         console.log("Starting fresh with API data.");
@@ -91,9 +94,9 @@ function cache_prune() {
         const files = fs.readdirSync(CACHE_FOLDER);
         for (const file of files) {
             fs.unlinkSync(CACHE_FOLDER + file);
-            console.info("Deleted file:", file);
+            //console.info("Deleted file:", file);
         }
-        console.info("Cache directory cleared.");
+        //console.info("Cache directory cleared.");
     } catch (error) {
         console.error("Cache prune error:", error);
     }
@@ -102,8 +105,8 @@ function cache_prune() {
 
 /**
  * Fetch data from the API
- * @param {string} api_url 
- * @returns {Object} JSON object from the API (Promise)
+ * @param {string} api_url - The URL of the API
+ * @returns {Promise} - A promise that resolves to the JSON data
  */
 async function fetch_data(api_url) {
     let response = await fetch(api_url) // fetch returns a promise
@@ -117,19 +120,23 @@ async function fetch_data(api_url) {
     return await response.json(); // .json() returns a promise
 }
 
-async function initializeData(tripUpdatesUrl, vehiclePositionsUrl, alertsUrl, cacheKey = "all") {
+/**
+ * Initialize the data by fetching from the API or reading from the cache
+ * @param {string} tripUpdatesUrl - The URL for trip updates
+ * @param {string} vehiclePositionsUrl - The URL for vehicle positions
+ * @param {string} cacheKey - The cache key to use for the cache files
+ * @returns {Array} - An array containing trip_updates, vehicle_positions, and alerts
+ */
+async function initializeData(tripUpdatesUrl, vehiclePositionsUrl, cacheKey = "all") {
     let trip_updates = [];
     let vehicle_positions = [];
-    let alerts = [];
 
     let allData = await read_cache(cacheKey);
 
-    if (allData) {
+    if (allData !== null && !firstStart) {
         try {
-            allData = JSON.parse(allData); // Parse the JSON string into an object
             trip_updates = allData.trip_updates || [];
             vehicle_positions = allData.vehicle_positions || [];
-            alerts = allData.alerts || [];
         } catch (error) {
             console.error("Error parsing JSON from cache file:", error.message);
         }
@@ -137,40 +144,36 @@ async function initializeData(tripUpdatesUrl, vehiclePositionsUrl, alertsUrl, ca
         // If cache files do not exist, fetch data from the API
         trip_updates = await fetch_data(tripUpdatesUrl);
         vehicle_positions = await fetch_data(vehiclePositionsUrl);
-        alerts = await fetch_data(alertsUrl);
 
         allData = {
             trip_updates,
-            vehicle_positions,
-            alerts
+            vehicle_positions
         };
 
         // Store JSON objects into cache files
         await save_cache(cacheKey, allData);
     }
 
-    return [ trip_updates, vehicle_positions, alerts ];
+    return [ trip_updates, vehicle_positions ];
 }
 
 /**
  * trigger cache prune every 5 minutes
  */
 async function triggerEveryFiveMinutes() {
-    console.info("5 minutes have passed. Timer triggered.");
+    //console.info("5 minutes have passed. Timer triggered.");
     cache_prune();
     
     // re-read the cache files
     trip_updates = await fetch_data(TRIP_UPDATES_URL);
     vehicle_positions = await fetch_data(VEHICLE_POSITIONS_URL);
-    alerts = await fetch_data(ALERTS_URL);
 
 
 
     // Store JSON objects into cache files
     let allData = {
         trip_updates,
-        vehicle_positions,
-        alerts
+        vehicle_positions
     };
     await save_cache("all", allData);
 }
@@ -179,8 +182,8 @@ async function triggerEveryFiveMinutes() {
  * Get all stops of a route
  * Method: route_short_name -> route_id -> trip_id -> (list of) stop_id -> (list of) stop_name
  * Handle loop routes or inbound-outbound routes
- * @param {string} route_short_name
- * @returns {Array} all_stops list of stops
+ * @param {string} route_short_name - The route short name
+ * @returns {Array} - List of stops
  */
 function get_stops(route_id) {
     let trips = tripsDF.getData();
@@ -190,25 +193,25 @@ function get_stops(route_id) {
     // Filter trips by route_id
     let inbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "0");
     let outbound_trips = trips.filter(trip => trip.route_id === route_id && trip.direction_id === "1");
-    console.info("Inbound Trips length:", inbound_trips.length);
-    console.info("Outbound Trips length:", outbound_trips.length);
+    //console.info("Inbound Trips length:", inbound_trips.length);
+    //console.info("Outbound Trips length:", outbound_trips.length);
 
     // Get stop_ids for inbound and outbound trips
     let inbound_stop_ids = stop_times.filter(stop_time => inbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
     let outbound_stop_ids = stop_times.filter(stop_time => outbound_trips.map(trip => trip.trip_id).includes(stop_time.trip_id));
-    console.info("Inbound Stop IDs length:", inbound_stop_ids.length);
-    console.info("Outbound Stop IDs length:", outbound_stop_ids.length);
+    //console.info("Inbound Stop IDs length:", inbound_stop_ids.length);
+    //console.info("Outbound Stop IDs length:", outbound_stop_ids.length);
 
     // Sort stops by stop_sequence
     inbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
     outbound_stop_ids.sort((a, b) => a.stop_sequence - b.stop_sequence);
-    console.info("Inbound Stop IDs (Sorted) length:", inbound_stop_ids.length);
-    console.info("Outbound Stop IDs (Sorted) length:", outbound_stop_ids.length);
+    //console.info("Inbound Stop IDs (Sorted) length:", inbound_stop_ids.length);
+    //console.info("Outbound Stop IDs (Sorted) length:", outbound_stop_ids.length);
 
     // Get the unique stops (assuming stop names might be repeated)
     let inbound_stops = inbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
     let outbound_stops = outbound_stop_ids.map(stop_time => stops.find(stop => stop.stop_id === stop_time.stop_id).stop_name);
-    //console.info("Inbound Stops:", inbound_stops);
+    ////console.info("Inbound Stops:", inbound_stops);
 
     // Combine inbound and outbound stops, solving route loops/inbound-outbound routes
     let all_stops;
@@ -226,7 +229,10 @@ function get_stops(route_id) {
     return all_stops;
 }
 
-
+/**
+ * Print the list of stops
+ * @param {Array} stopsList - List of stops
+ */
 function print_stops(stopsList) {
     for (let i = 0; i < stopsList.length; i++) {
         console.log(i + 1 + ". " + stopsList[i]);
@@ -234,76 +240,39 @@ function print_stops(stopsList) {
 }
 
 /**
- * Convert string date to Date object in the format YYYYMMDD
- * @param {string} stringDate 
- * @returns {Date} Date object
+ * Get the live arrival times and bus positions for a given trip
+ * @param {string} tripId - The trip ID
+ * @param {Array} tripUpdatesLive - Array of live trip updates from the GTFS dataset
+ * @param {Array} vehiclePositionsLive - Array of live vehicle positions from the GTFS dataset
+ * @returns {Array} - An array containing the live arrival time and bus position
  */
-function to_date(stringDate) {
-    // from YYYYMMDD to Date object
-    let year = stringDate.substring(0, 4);
-    let month = stringDate.substring(4, 6);
-    let day = stringDate.substring(6, 8);
-    //console.log(year, month, day);
-    return new Date(year + "-" + month + "-" + day);
-}
-function find_trips(DF, time, start_stop) {
-    const timeInMinutes = time.split(':').reduce((h, m) => h * 60 + +m);
+async function getLiveArrivalTimesAndPositions(tripId, tripUpdatesLive, vehiclePositionsLive) {
+    let liveArrivalTime = "-";
+    let liveBusPosition = "-";
 
-    const tripList = DF.extract(({ stop_name, arrival_time }) => {
-        if (stop_name.toLowerCase() !== start_stop.toLowerCase()) return false;
+    // Find the trip update for the given tripId
+    const tripUpdate = tripUpdatesLive.find(update => update.tripUpdate.trip.tripId === tripId);
+    console.info("Trip Update:", tripUpdate);
+    if (tripUpdate && tripUpdate.tripUpdate.stopTimeUpdate) {
+        const stopUpdate = tripUpdate.tripUpdate.stopTimeUpdate.find(update => update.stopId); // Assuming stopId is available
+        console.info("Stop Update:", stopUpdate);
+        if (stopUpdate && stopUpdate.arrival) {
+            liveArrivalTime = stopUpdate.arrival.time; // Use the arrival time from trip update
+            console.info("Live Arrival Time:", liveArrivalTime);
+        }
+    }
 
-        const arrivalInMinutes = arrival_time.split(':').reduce((h, m) => h * 60 + +m);
+    // Find the vehicle position for the given tripId
+    const vehiclePosition = vehiclePositionsLive.find(position => position.vehicle.trip.tripId === tripId);
+    if (vehiclePosition) {
+        liveBusPosition = {
+            latitude: vehiclePosition.vehicle.position.latitude,
+            longitude: vehiclePosition.vehicle.position.longitude
+        };
+    }
+    console.info("Live Bus Position:", liveBusPosition);
 
-        const timeDifference = arrivalInMinutes - timeInMinutes;
-        return timeDifference >= 0 && timeDifference < 10; // less than 10 minutes
-    });
-
-    return tripList;
-}
-
-/**
- * Calculate the time difference between two times in HH:MM:SS format
- * @param {string} startTime 
- * @param {string} endTime 
- */
-function time_differ(startTime, endTime) {
-    const toSeconds = time => time.split(':').reduce((acc, time) => 60 * acc + +time, 0);    
-
-    const differenceInSeconds = toSeconds(endTime) - toSeconds(startTime);
-
-    const hours = Math.floor(differenceInSeconds / 3600);
-    const minutes = Math.floor((differenceInSeconds % 3600) / 60);
-    const seconds = differenceInSeconds % 60;
-
-    return [hours, minutes, seconds].map(unit => String(unit).padStart(2, '0')).join(':');
-}
-
-/**
-* Convert the time of format HH:MM:SS to minutes, ignoring the seconds
-* @param {string} time 
-* @returns {number} time in minutes
-*/
-function to_minutes(time) {
-    let l = time.split(':').map(Number);
-    let a = l[0] * 60 + l[1];
-    console.info("Time in minutes:", a);
-    return a;
-}
-
-// for testing purposes only
-function convertMillisecondsToTime(milliseconds) {
-    // Create a Date object from the milliseconds
-    const date = new Date(milliseconds);
-
-    // Extract hours, minutes, and seconds from the Date object
-    const hours = date.getUTCHours(); // getUTCHours() is used to get the hours in the UTC time zone
-    const minutes = date.getUTCMinutes(); // getUTCMinutes() is used to get the minutes in the UTC time zone
-    const seconds = date.getUTCSeconds(); // getUTCSeconds() is used to get the seconds in the UTC time zone
-
-    // Format the time as HH:mm:ss
-    const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-
-    return formattedTime;
+    return [liveArrivalTime, liveBusPosition];
 }
 
 
@@ -338,7 +307,7 @@ async function main() {
             if (!route_id) {
                 throw new Error("Invalid Bus Route");
             }
-            console.info("Bus Route: " + routeShortName + " of type " + typeof routeShortName + " with route_id: " + route_id);
+            //console.info("Bus Route: " + routeShortName + " of type " + typeof routeShortName + " with route_id: " + route_id);
             
         } catch (error) {
             console.error(error.message);
@@ -346,9 +315,9 @@ async function main() {
             continue;
         }
         // print all stops for the bus route from route_url
-        console.info("Joined DF length (before) - with route_id:", joinedDf.getData().length);
+        //console.info("Joined DF length (before) - with route_id:", joinedDf.getData().length);
         joinedDf.filter('route_id', route_id); 
-        console.info("Joined DF length (after):", joinedDf.getData().length);
+        //console.info("Joined DF length (after):", joinedDf.getData().length);
         stopsList = get_stops(route_id);
         print_stops(stopsList);
         // make stopsList as tuple with index and stop name
@@ -358,8 +327,6 @@ async function main() {
             try {
                 let startEnd =  await prompt("What is your start and end stop on the route?"); // format: "start_stop - end_stop" "14 - 20"; // "2 - 7"; //
                 [start_stop, end_stop] = startEnd.split("-").map(stop => stop.trim()).map(Number);
-                //console.info("Start Stop:", start_stop);
-                //console.info("End Stop:", end_stop);
                 // check if the start and end stops are valid in stopTuple (to string)
                 if (!stopsTuple.some(stop => stop[0] === start_stop) || !stopsTuple.some(stop => stop[0] === end_stop)) {
                     throw new Error("Invalid Stops");
@@ -380,7 +347,7 @@ async function main() {
                     }
                     // check if the date is valid
                     date = new Date(dateStr);
-                    console.info("Date:", date);
+                    //console.info("Date:", date);
                     if (date.toString() === "Invalid Date") {
                         throw new Error("Invalid Date");
                     }
@@ -413,24 +380,26 @@ async function main() {
                     const minutes = hour * 60 + minute;
                     // get the day of the week
                     const dayOfWeek = DAYS_OF_WEEK[date.getDay()];
-                    //console.info("Day of the week:", dayOfWeek);
+                    ////console.info("Day of the week:", dayOfWeek);
 
                     // print to verify the user input is correct
-                    console.info("route_id:", route_id, "date:", date, "start_stop:", start_stop, "end_stop:", end_stop, "time:", time);
+                    //console.info("route_id:", route_id, "date:", date, "start_stop:", start_stop, "end_stop:", end_stop, "time:", time);
                     
-                    console.info("tripsDF length (before) - with direction id", tripsDF.getData().length);
+                    //console.info("tripsDF length (before) - with direction id", tripsDF.getData().length);
                     if (!isLoopRoute && (start_stop > Math.floor(stopsList.length / 2))) {
                             tripsDF.filter('direction_id', '1'); // outbound
+                            //console.info("This is an outbound route.");
                         } else {
                             tripsDF.filter('direction_id', '0'); // inbound
+                            //console.info("This is an inbound route.");
                         }
-                    console.info("tripsDF length (after):", tripsDF.getData().length);
+                    //console.info("tripsDF length (after):", tripsDF.getData().length);
 
-                    console.info("Calendar DF DF length (before):", stopTimesDF.getData().length);
+                    //console.info("Calendar DF DF length (before):", stopTimesDF.getData().length);
                     calendarDF.join(calendarDatesDF, 'service_id'); // calendarDF + calendarDatesDF
-                    console.info("Calendar DF length (after):", calendarDF.getData().length);
+                    //console.info("Calendar DF length (after):", calendarDF.getData().length);
                     
-                    console.info("Calendar Dates DF length (before):", calendarDatesDF.getData().length);
+                    //console.info("Calendar Dates DF length (before):", calendarDatesDF.getData().length);
                     calendarDF.filterBy(cal => {
                         let startDate = to_date(cal.start_date);
                         let endDate = to_date(cal.end_date);
@@ -448,41 +417,41 @@ async function main() {
                             && date >= startDate
                             && date <= endDate;
                     });                    
-                    console.info("Filtered Calendar DF length (after):", calendarDF.getData().length);
+                    //console.info("Filtered Calendar DF length (after):", calendarDF.getData().length);
                     
                     
-                    console.info("Stop Times DF length (before):", stopTimesDF.getData().length);
+                    //console.info("Stop Times DF length (before):", stopTimesDF.getData().length);
                     stopsDF.filterBy(stop => stop.stop_name === stopsList[start_stop - 1] || stop.stop_name === stopsList[end_stop - 1]);
-                    console.info("Filtered Stops DF length (after):", stopsDF.getData().length);
+                    //console.info("Filtered Stops DF length (after):", stopsDF.getData().length);
 
                     joinedDf.join(tripsDF, 'route_id'); // routeDf + tripsDF
-                    console.info("Joined DF length (route_id):", joinedDf.getData().length);
+                    //console.info("Joined DF length (route_id):", joinedDf.getData().length);
 
                     joinedDf.join(stopTimesDF, 'trip_id'); // routeDf + tripsDF + stopTimesDF
-                    console.info("Filtered joined DF length (trip_id):", joinedDf.getData().length);
+                    //console.info("Filtered joined DF length (trip_id):", joinedDf.getData().length);
                     
                     joinedDf.join(stopsDF, 'stop_id'); // routeDf + tripsDF + stopTimesDF + stopsDF
-                    console.info("Filtered joined DF length (stop_id):", joinedDf.getData().length);
-                    //console.info("Joined DF:", joinedDf.getData());
+                    //console.info("Filtered joined DF length (stop_id):", joinedDf.getData().length);
+                    ////console.info("Joined DF:", joinedDf.getData());
 
                     joinedDf.join(calendarDF, 'service_id'); // routeDf + tripsDF + stopTimesDF + stopsDF + calendarDF + calendarDatesDF
-                    console.info("Filtered joined DF length (service_id):", joinedDf.getData().length);
+                    //console.info("Filtered joined DF length (service_id):", joinedDf.getData().length);
                     
-                    console.info("joinedDf length (before) - with start_stop:", joinedDf.getData().length);
+                    //console.info("joinedDf length (before) - with start_stop:", joinedDf.getData().length);
                     let startTimes = joinedDf.extractBy(stop => {               // get all the valid stops
                         // if the stop is the first stop, use departure_time instead of arrival_time
                         
                         let arrival_time = (start_stop === 1) ? stop.departure_time : stop.arrival_time;
 
-                        //console.info("Arrival Time:", arrival_time);
+                        ////console.info("Arrival Time:", arrival_time);
                         const arrivalList = arrival_time.split(':').map(Number)
                         const arrivalInMinutes = arrivalList[0] * 60 + arrivalList[1];
                         
                         const timeDifference = arrivalInMinutes - minutes;
-                        //console.info("Arrival Time in Minutes:", arrivalInMinutes, "Time in Minutes:", minutes, "Time Difference:", timeDifference);
+                        ////console.info("Arrival Time in Minutes:", arrivalInMinutes, "Time in Minutes:", minutes, "Time Difference:", timeDifference);
                         return timeDifference >= 0 && timeDifference < 10 && stop.stop_name.toLowerCase() === stopsList[start_stop - 1].toLowerCase();
                     });
-                    console.info("startTimes length:", startTimes.length);
+                    //console.info("startTimes length:", startTimes.length);
 
                     // sort the trips by arrival time and trip id
                     //joinedDf.sortBy('arrival_time').sortBy('trip_id');
@@ -507,51 +476,30 @@ async function main() {
                         });
                     });
                     
-                    console.info("Extract Pairs:", extractPairs);
+                    //console.info("Extract Pairs:", extractPairs);
                     
                     let objects = [];
-                    extractPairs.forEach(element => { // for each trip
-                        let obj = {};                                   // create an object to store the trip details
+                    extractPairs.forEach(element => { // for each object
+                        let obj = {};                                   // create an object to store the onject details
                         let estimatedTime = "null"                      // estimated time to reach the end stop from the start stop 
-                        console.info("element[0].arrival_time:", element[0].arrival_time, "element[1].arrival_time:", element[1].arrival_time);
+                        //console.info("element[0].arrival_time:", element[0].arrival_time, "element[1].arrival_time:", element[1].arrival_time);
                         if (to_minutes(element[0].arrival_time) > to_minutes(element[1].arrival_time)) {
-                            continue; // skip and go to the next pair
+                            // skip and go to the next pair
+                            return;
                         }
                         estimatedTime = time_differ(element[0].arrival_time, element[1].arrival_time); // calculate the estimated time to reach the end stop from the start stop
-                        console.info("Estimated Time:", estimatedTime);
+                        //console.info("Estimated Time:", estimatedTime);
 
-                        console.info(element[0].trip_id, trip_updates.entity[0].tripUpdate.trip.tripId);
-                        if (trip_updates.entity == undefined || vehicle_positions.entity == undefined) {
+                        //console.info(element[0].trip_id, trip_updates.entity[0].tripUpdate.trip.tripId);
+                        if (trip_updates.entity === undefined || vehicle_positions.entity === undefined) {
                             console.error("No trip updates or vehicle positions available.");
                         } else {
-                            console.info("Trip Updates:", trip_updates.entity[0].id);
+                            //console.info("Trip Updates:", trip_updates.entity[0].id);
                         }
 
-                        let liveTripUp = trip_updates.entity.find(entity => entity.tripUpdate.trip.tripId === element[0].trip_id); // entity.id === entity.tripUpdate.trip.tripId
-                        console.info("Live Trip Updates:", liveTripUp);
-                        let liveArrivalTime;        // live arrival time at the stop
-                        let livePosition;           // live position of the vehicle
-
-                        if (liveTripUp) {
-                            const liveArrival = liveTripUp.tripUpdate.stopTimeUpdate.find(
-                                stopUpdate => stopUpdate.stopId === trip.stop_id
-                            );
-                            console.info("Live Arrival:", liveArrival, "Live Arrival:", liveArrival.arrival);
-                            if (liveArrival && liveArrival.arrival && liveArrival.arrival.time) {
-                                liveArrivalTime = convertToAEST(liveArrival.arrival.time);
-                            }
-                            console.info("Live Arrival Time:", liveArrivalTime);
-                        }
                     
-                        const liveVePos = vehicle_positions.entity.find(entity => entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.tripId === element[0].trip_id);
-                        console.info("Live Vehicle Position:", liveVePos);
-
-                        if (liveVePos && liveVePos.vehicle.position) {
-                            const { latitude, longitude } = liveVePos.vehicle.position;
-                            livePosition = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                        }
-                        
-                        // create an object with the route short name, trip_id, route long name, service_id, headsign, scheduled arrival time, live arrival time, live position, and estimated time
+                        let tripId = element[0].trip_id;
+                        let [ liveArrivalTime, liveBusPosition ] = getLiveArrivalTimesAndPositions(tripId, trip_updates.entity, vehicle_positions.entity);
                         obj = {
                             "Route Short Name": routeShortName,
                             "Trip ID": element[0].trip_id,
@@ -559,8 +507,8 @@ async function main() {
                             "Service ID": element[0].service_id,
                             "Headsign": element[0].trip_headsign,
                             "Scheduled Arrival Time": element[0].arrival_time,
-                            "Live Arrival Time": liveArrivalTime,
-                            "Live Position": livePosition,
+                            "Live Arrival Time": convertToBrisbaneTime(liveArrivalTime),
+                            "Live Position": liveBusPosition,
                             "Estimated Time": estimatedTime
                         };
                         objects.push(obj);
@@ -576,6 +524,8 @@ async function main() {
                                 break;
                             }
                             if (restart.toLowerCase() === "no" || restart.toLowerCase() === "n") {
+                                // clear the interval
+                                clearInterval(timerId);
                                 console.log("Thanks for using the Route tracker!");
                                 return;
                             }
@@ -593,6 +543,6 @@ async function main() {
     }
 
 }
-[trip_updates, vehicle_positions, alerts] = await initializeData(TRIP_UPDATES_URL, VEHICLE_POSITIONS_URL, ALERTS_URL, "all");
-
+[trip_updates, vehicle_positions, alerts] = await initializeData(TRIP_UPDATES_URL, VEHICLE_POSITIONS_URL, "all");
+firstStart = false;
 main();
